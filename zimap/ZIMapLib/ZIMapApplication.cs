@@ -1,0 +1,920 @@
+//==============================================================================
+// ZIMapApplication.cs implements the ZIMapApplication class
+//==============================================================================
+
+#region Copyright 2008 Dr. Jürgen Pfennig  --  GNU Lesser General Public License
+// This software is published under the GNU LGPL license. Please refer to the
+// files COPYING and COPYING.LESSER for details. Please use the following e-mail
+// address to contact me or to send bug-reports:  info at j-pfennig dot de .  
+#endregion
+
+using System;
+using System.Text;
+using System.Collections.Generic;
+
+namespace ZIMap
+{
+    //==========================================================================
+    // Class with Methods that execute multiple IMap commands
+    //==========================================================================
+
+    /// <summary>
+    /// Class that implement the Application layer of ZIMap.
+    /// </summary>
+    /// <remarks>
+    /// The <b>application<b> layer it the top-most of three layers. The others
+    /// are the command and the protocol layers.
+    /// </remarks>
+    public class ZIMapApplication
+    {
+        public readonly string  ServerName;
+        public readonly uint    ServerPort;
+        
+        private ZIMapConnection connection;        
+        private ZIMapFactory    factory;
+        private ZIMapServer     server;
+            
+        private string          username;
+        private uint            timeout = 30;
+        private ZIMapMonitor    monitorLevel = ZIMapMonitor.Error;
+        private bool            monitorAll = false;
+        private uint            fetchBlock = 50;
+        private uint            progress = 100;
+        
+        // feature flags ...
+        private bool            enableMessages;
+        private bool            enableProgress;
+        private bool            enableUid;
+            
+        // see OpenMailbox ...
+        private string          mailboxName;
+        private uint            mailboxTag;
+        private bool            mailboxReadonly;
+        
+        // =====================================================================
+        // Accessors
+        // =====================================================================
+        
+        public ZIMapConnection Connection
+        {   get {   return connection;  }
+        }
+
+        public bool EnableProgressReporting
+        {   get {   return enableProgress;  }
+            set {   enableProgress = value; }
+        }
+
+// TODO: implement EnableMessagesReporting        
+        public bool EnableMessagesReporting
+        {   get {   return enableMessages;  }
+            set {   enableMessages = value; }
+        }
+
+        public bool EnableUidCommands
+        {   get {   return enableUid;  }
+            set {   enableUid = value; }
+        }
+        
+        public ZIMapFactory Factory
+        {   get {   return factory;  }
+        }
+
+        public bool IsLoggedIn
+        {   get {   if(username == null || connection == null) return false;
+                    if(!connection.IsTransportClosed) return true;
+                    username = null; return false;
+                }
+        }
+
+        public string MailboxName
+        {   get {   return mailboxName; }
+        }
+        
+        public bool MailboxIsReadonly
+        {   get {    return mailboxReadonly; }
+        }
+        
+        public ZIMapMonitor MonitorLevel
+        {   get {   return monitorLevel;  }
+            set {   SetMonitorLevel(value, false);  }
+        }
+
+        public uint Progress
+        {   get {   return progress; }
+        }
+        
+        public ZIMapServer Server
+        {   get {   if(server == null) server = ZIMapServer.Create(factory);   
+                    return server; 
+                }
+            set {   if(value == null) MonitorError("Cannot assign null");
+                    else              server = value;
+                }
+        }
+
+        public uint Timeout
+        {   get {   return timeout; }
+            set {   timeout = value;
+                    if(connection != null) 
+                        connection.TransportTimeout = (int)(Timeout * 1000);
+                }
+        }
+        
+        public string User
+        {   get {   return username;  }
+        }
+        
+        // =====================================================================
+        // Constructors 
+        // =====================================================================
+
+        public ZIMapApplication(string server) : this(server, null) {}
+
+        public ZIMapApplication(string server, string protocol) :
+            this(server, ZIMapConnection.GetIMapPort(protocol)) {}
+
+        public ZIMapApplication(string server, uint port)
+        {   ServerName = server; ServerPort = port;  
+        }
+
+        // =====================================================================
+        // Debug stuff
+        // =====================================================================
+        
+        public void MonitorProgress(uint percent)
+        {   if(percent > 100) percent = 100;
+            if(percent <= progress && percent > 0) return;
+            progress = percent;
+            if(!enableProgress) return;
+            ZIMapConnection.Monitor(factory, "ZIMapApplication", ZIMapMonitor.Progress, percent.ToString());
+        }
+        
+        public void MonitorError(string message)
+        {   if(progress != 100) MonitorProgress(100);
+            ZIMapConnection.Monitor(factory, "ZIMapApplication", ZIMapMonitor.Error, message);
+        }
+        
+        public void MonitorInfo(string message)
+        {   if(monitorLevel <= ZIMapMonitor.Info)
+                ZIMapConnection.Monitor(factory, "ZIMapApplication", ZIMapMonitor.Info, message);
+        }
+        
+        public void MonitorDebug(string message)
+        {   if(monitorLevel <= ZIMapMonitor.Debug)
+                ZIMapConnection.Monitor(factory, "ZIMapApplication", ZIMapMonitor.Info, message);
+        }
+        
+        public void SetMonitorLevel(ZIMapMonitor level, bool allLayers)
+        {   if(level > ZIMapMonitor.Error) return;
+            monitorLevel = level;
+            monitorAll = allLayers;
+            if(factory == null) return;
+            factory.MonitorLevel = level;
+            factory.Connection.MonitorLevel = level;
+            if(!allLayers && level != ZIMapMonitor.Error) level = ZIMapMonitor.Info; 
+            factory.Connection.TransportLayer.MonitorLevel = level;
+            factory.Connection.ProtocolLayer.MonitorLevel = level;
+        }
+        
+        // =====================================================================
+        // Connect and Disconnect 
+        // =====================================================================
+        
+        public bool Connect(string user, string password)
+        {
+            // step 1: Open a new connection and get factory ...
+            MonitorProgress(0);
+            if(connection != null) Disconnect();
+
+            connection = ZIMapConnection.GetConnection(ServerName, ServerPort);
+            if(connection != null)
+            {   connection.MonitorLevel = MonitorLevel;
+                MonitorProgress(25);
+                if(Timeout >= 0) connection.TransportTimeout = (int)(Timeout * 1000);
+                factory = connection.CommandLayer;
+            }
+            if(factory == null)
+            {   connection = null;
+                MonitorError("Connect: failed to open connection");
+                return false;
+            }
+            
+            // defaults for logging ...
+            SetMonitorLevel(monitorLevel, monitorAll);
+            
+            // step 2: login
+            MonitorInfo("Connect: server greeting: " + connection.ProtocolLayer.ServerGreeting);
+            MonitorProgress(50);
+            
+            ZIMapCommand.Login cmd = factory.CreateLogin();
+            cmd.Queue(user, password);
+            if(!cmd.Data.Succeeded)
+            {   MonitorError("Connect: login failed");
+                return false;
+            }
+            username = user;
+            MonitorProgress(75);
+            
+            // set 3: get server configuration
+
+            if(connection.ProtocolLayer.ServerGreeting.ToLower().Contains("cyrus"))
+                MonitorInfo("Connect: server is Cyrus");
+            if(Factory.HasCapability("ACL"))
+                MonitorInfo("Connect: server supports ACL");
+            if(Factory.HasCapability("QUOTA"))
+                MonitorInfo("Connect: server supports QUOTA");
+// TODO: ZIMapApplication: Connect server config
+            MonitorProgress(100);
+            return true;
+        }
+        
+        public void Disconnect()
+        {
+            if(factory != null && IsLoggedIn)
+                factory.CreateLogout().Execute(true);
+            if(connection != null)
+            {   connection.Close();
+                MonitorInfo("Disconnect: done");
+            }
+            
+            connection = null;
+            factory = null;
+            username = null;
+            mailboxName = null;
+        }
+                                       
+        // =====================================================================
+        // Get MailBox list
+        // =====================================================================
+
+        public struct  MailBox
+        {   public string   Name;
+            public string[] Attributes;
+            public char     Delimiter;   
+            public bool     Subscribed;            
+            public uint     Messages;
+            public uint     Recent;
+            public uint     Unseen;
+            public object   UserData;
+        }
+
+        /// <summary>
+        /// Get information about mailboxes and subfolders.
+        /// </summary>
+        /// <param name="qualifier">
+        /// Can be a prefix like "user" or "MyFolder.Something" that gets prepended
+        /// to the filter argument.  There is no need to put a hierarchy delimiter
+        /// at the end, this function automatically inserts it to separate qualifier
+        /// and filter. 
+        /// </param>
+        /// <param name="filter">
+        /// Can be a folder name optionally containing a '*' or a '%' character.
+        /// </param>
+        /// <param name="subscribed">
+        /// A number indicating if the subscription status should by loaded (for
+        /// <c>subscribed != 0<c>, if the status should be loaded (<c>1<c>) or
+        /// if only subscribed mailboxes should be returned (<c>2</c>). 
+        ///  <c>true</c> only subcribed folders are considered.
+        /// </param>
+        /// <param name="detailed">
+        /// When <c>false</c> only the mailbox name and the subscription status are
+        /// returned (which is quite fast). A value of <c>true</c> also gets the
+        /// message, seen and recent counts for each mailbox.
+        /// </param>
+        /// <returns>
+        /// On success an array of Mailbox info structures or <c>null</c> on error.
+        /// </returns>
+        public MailBox[] Mailboxes(string qualifier, string filter, 
+                                   uint subscribed, bool detailed)
+        {
+            if(factory == null) return null;
+            ZIMapCommand.List cmdList = (subscribed == 2) ? factory.CreateLsub()
+                                                          : factory.CreateList();
+            if(cmdList == null) return null;
+            MonitorProgress(0);
+
+            ZIMapCommand.Lsub cmdLSub = null;
+            if(subscribed == 1) cmdLSub = new ZIMapCommand.Lsub(factory); 
+
+            // does server specific things ...
+            Server.NormalizeQualifierFilter(ref qualifier, ref filter);
+            
+            // send the commands ...
+            cmdList.Queue(qualifier, filter);            
+            if(cmdLSub != null) cmdLSub.Queue(qualifier, filter);
+            MonitorProgress(5);
+            
+            // wait for the mailbox list ...            
+            ZIMapCommand.List.Item[] items = cmdList.Items;
+            cmdList.Dispose();
+            if(items == null)
+            {   MonitorError("Mailboxes: got no mailboxes");
+                return null;
+            }
+            MonitorProgress(15);
+            
+            // create mailbox data ...
+            MailBox[] mbox = new MailBox[items.Length];
+            int irun = 0;
+            foreach(ZIMapCommand.List.Item i in items)
+            {   mbox[irun].Name = i.Name;
+                mbox[irun].Delimiter = i.Delimiter;
+                mbox[irun].Attributes = i.Attributes;
+                mbox[irun].Subscribed = (subscribed == 2);
+                if(detailed)
+                {   ZIMapCommand.Examine cmd = factory.CreateExamine();
+                    cmd.UserData = irun;
+                    cmd.Queue(i.Name);
+                }
+                irun++;
+            }
+
+            // get subscription info ...
+            if(cmdLSub != null)
+            {   items = cmdLSub.Items;
+                MonitorProgress(20);
+                if(!cmdLSub.Data.Succeeded)
+                    MonitorError("Mailboxes: got no subscription info");
+                else if(items != null)
+                {   int icur = 0;
+                    foreach(ZIMapCommand.List.Item i in items)
+                    {   for(int imax=irun; imax > 0; imax--)
+                        {   if(icur >= irun) icur = 0;
+                            if(i.Name  == mbox[icur].Name)
+                            {   mbox[icur++].Subscribed = true;
+                                break;
+                            }
+                            icur++;
+                        }
+                    }
+                }
+                cmdLSub.Dispose();
+            }
+
+            // fetch details ...
+            if(!detailed)
+            {   MonitorProgress(100);
+                return mbox;
+            }
+            items = null;
+            MonitorInfo("Mailboxes: Fetching " + irun + " details");
+            MonitorProgress(25);
+            
+            factory.ExecuteCommands(true);
+            ZIMapCommand[] cmds = factory.CompletedCommands;
+            
+            foreach(ZIMapCommand c in cmds)
+            {   ZIMapCommand.Examine cmd = c as ZIMapCommand.Examine;
+                if(cmd == null) continue;
+                irun = (int)(cmd.UserData);
+                mbox[irun].Messages = cmd.Messages;
+                mbox[irun].Recent   = cmd.Recent;
+                mbox[irun].Unseen   = cmd.Unseen;
+                uint prog = 30 + (uint)((irun * 70.0) / mbox.Length);
+                MonitorProgress(Math.Min(prog, 99)); 
+            }
+            factory.DisposeCommands(null, false);
+            MonitorProgress(100);
+            return mbox;
+        }
+         
+        // =====================================================================
+        // Fetch mail headers
+        // =====================================================================
+        
+        public struct  MailInfo
+        {
+            public uint     Index;              // index in mailbox
+            public uint     UID;                // uid (needs UID part)
+            public uint     Size;               // data size (needs RFC822.SIZE)
+            public string[] Parts;              // unparsed parts
+            public string[] Flags;              // flags (needs FLAGS)
+            public byte[]   Literal;            // literal data
+            public object   UserData;
+            
+            public MailInfo(ZIMapCommand.Fetch.Item item)
+            {   Index   = item.Index;
+                UID     = item.UID;
+                Size    = item.Size;
+                Parts   = item.Parts;
+                Flags   = item.Flags;
+                Literal = item.Literal;
+                UserData= null;
+            }
+        }
+        
+        public MailInfo[] MailHeaders()
+        {   return MailHeaders(0, uint.MaxValue, null);
+        }
+        
+        public MailInfo[] MailHeaders(uint firstIndex, uint lastIndex, string what) 
+        {   if(what == null || what == "") what = "UID FLAGS RFC822.SIZE BODY.PEEK[HEADER]";
+            if(lastIndex < firstIndex) return null;
+            if(factory == null) return null;
+
+            ZIMapCommand.Fetch fetch = factory.CreateFetch();
+            if(fetch == null) return null;
+            MonitorProgress(0);
+
+            uint count = lastIndex - firstIndex;
+            uint block = fetchBlock;
+            uint progress = 0;
+            uint progrmax = count;
+            List<MailInfo> items = null;
+            ZIMapCommand.Fetch.Item[] part = null;
+            
+            while(count > 0)
+            {   uint chunk = count; // Math.Min(count, block); // bug on mono?
+                if(chunk > block) chunk = block;
+                fetch.Reset();
+                fetch.Queue(firstIndex, firstIndex+chunk-1, what);
+
+                // semi logarithmic progress ...
+                if(lastIndex == uint.MaxValue)
+                {   if(progress < 32*16)
+                        progress += 64;
+                    else if(progress < 64*16)
+                        progress += 16;
+                    else if(progress < 99)
+                        progress += 1;
+                    MonitorProgress(progress / 16);
+                }
+                // exact progress ...
+                else
+                {   progress += block;
+                    double cent = (progress * 100.0) / progrmax;
+                    uint cval = (uint)cent;
+                    if(cval > 99) cval = 99;
+                    MonitorProgress(cval);
+                }
+                
+                part = fetch.Items;
+                if(part == null)
+                {   if(fetch.Data.Succeeded)
+                        break;                      // server said: OK no more data
+                    if(fetch.Data.ReceiveState == ZIMapReceiveState.Error && items != null)
+                        break;                      // server said: BAD no more data
+                    if(fetch.Data.ReceiveState == ZIMapReceiveState.Failure)
+                        break;                      // server said: No no matching data
+                    MonitorError("MailHeaders: FETCH failed: " + fetch.Data.Message);
+                    factory.DisposeCommands(null, false);
+                    return null;
+                }
+                
+                // only one chunk, directly return the array
+                if(count == chunk && items == null) break;
+                
+                // multiple chunks, store items in a list
+                if(items == null)
+                    items = new List<MailInfo>();
+                foreach(ZIMapCommand.Fetch.Item item in part)
+                    items.Add(new MailInfo(item));
+                count -= chunk;
+                firstIndex += chunk;
+            }
+
+            factory.DisposeCommands(null, false);
+            MailInfo[] rval = null;
+            if     (items != null) rval = items.ToArray();
+            else if(part == null)  rval = new MailInfo[0];
+            MonitorProgress(100);
+            MonitorInfo("MailHeaders: Got " + rval.Length + " mails");
+            return rval;
+        }
+        
+        /// <summary>
+        /// Fetch Mail Header for a list of UIDs (or IDs).
+        /// </summary>
+        /// <param name="ids">
+        /// Depending on <see cref="EnableUidCommands"/> this is an array of UIDs 
+        /// (<c>true</c>) or IDs (<c>false</c>).
+        /// </param>
+        /// <param name="what">
+        /// A list of IMap items to be returned. If empty or null the default is:
+        /// "<c>(UID FLAGS RFC822.SIZE BODY.PEEK[HEADER])</c>".
+        /// </param>
+        /// <returns>
+        /// An array of mail headers (may be zero-sized) or <c>null</c> on error.
+        /// </returns>
+        /// <remarks>
+        /// This method is used by <see cref="MailSearch(string, string, params string[])"/>.
+        /// It is recommended to set <see cref="EnableUidCommands"/> to <c>true</c>. 
+        /// </remarks>
+        public MailInfo[] MailHeaders(uint[] ids, string what) 
+        {   if(string.IsNullOrEmpty(what)) what = "UID FLAGS RFC822.SIZE BODY.PEEK[HEADER]";
+            if(ids == null || ids.Length < 1) return null;
+            if(factory == null) return null;
+
+            ZIMapCommand.Fetch fetch = factory.CreateFetch();
+            if(fetch == null) return null;
+            MonitorProgress(0);
+            fetch.UidCommand = enableUid;
+
+            uint count = (uint)ids.Length;
+            uint block = fetchBlock;
+            ZIMapCommand.Fetch.Item[] part = null;
+            MailInfo[] rval = null;
+            
+            if(count <= block)
+            {   fetch.Queue(ids, what);
+                MonitorProgress(20);
+                part = fetch.Items;
+                if(part == null)
+                {   MonitorError("MailHeaders: FETCH failed: " + fetch.Data.Message);
+                    factory.DisposeCommands(null, false);
+                    return null;
+                }
+            }
+            else
+            {   List<MailInfo> items = new List<MailInfo>();
+                uint last = 0;
+                uint offs = 0;
+                uint progress;
+                uint[] sub = null;
+                while(count > 0)
+                {   uint chunk = Math.Min(count, block);
+                    if(chunk != last)
+                    {   sub = new uint[chunk];
+                        last = chunk;
+                    }
+                    Array.Copy(ids, offs, sub, 0, chunk);
+
+                    progress = (uint)((offs * 100.0) / ids.Length); 
+                    MonitorProgress(Math.Min(progress, 99));
+                    fetch.Queue(sub, what);
+
+                    part = fetch.Items;
+                    if(part == null)
+                    {   MonitorError("MailHeaders: FETCH failed: " + fetch.Data.Message);
+                        factory.DisposeCommands(null, false);
+                        return null;
+                    }
+
+                    foreach(ZIMapCommand.Fetch.Item item in part)
+                        items.Add(new MailInfo(item));
+                    fetch.Reset();
+                    count -= chunk; offs += chunk;
+                }
+                rval = items.ToArray();
+            }
+            
+            factory.DisposeCommands(null, false);
+            if(rval == null) rval = new MailInfo[0];
+            MonitorInfo("MailHeaders: Got " + rval.Length + " mails");
+            MonitorProgress(100);
+            return rval;
+        }   
+      
+        // =====================================================================
+        // Mailbox Selection 
+        // =====================================================================
+
+        /// <summary>
+        /// Search a MailBox array for a mailbox.
+        /// </summary>
+        /// <param name="mailboxes">
+        /// The array to be searched.
+        /// </param>
+        /// <param name="partialName">
+        /// A full name or a partial name to search for.
+        /// </param>
+        /// <returns>
+        /// An index <c>&gt;= 0</c> on succes. <c>-1</c> is returned when the
+        /// mailbox was not found or if an argument was invalid. <c>-2</c> indicates
+        /// a partial name the was not unique.
+        /// </returns>
+        /// <remarks>
+        /// If the given <c>partialName</c> argument exactly matches a mailbox name
+        /// (case sensitive) the search stops and the index is returned. Only when a
+        /// substring is matched the search continues to detetect ambiguities.
+        /// </remarks>
+        public static int MailboxFind(MailBox[] mailboxes, string partialName)
+        {   if(mailboxes == null || mailboxes.Length < 1 || string.IsNullOrEmpty(partialName))
+                return -1;
+
+            List<string> boxes = new List<string>();
+            foreach(ZIMapApplication.MailBox mb in mailboxes) 
+                boxes.Add(mb.Name);
+            string[] boxea = boxes.ToArray();
+            int idx = ZIMapFactory.FindInStrings(boxea, 0, partialName, true);
+            if(idx < 0) return -1;                      // not found
+            if(partialName == boxea[idx]) return idx;
+            
+            int amb = ZIMapFactory.FindInStrings(boxea, idx+1, partialName, true);
+            if(amb < 0) return idx;
+            if(partialName == boxea[amb]) return amb;
+            return -2;                                  // ambigious
+        }
+
+        public bool MailboxOpen(string fullName, bool readOnly) 
+        {   MailBox dummy;
+            return MailboxOpen(fullName, readOnly, false, out dummy);
+        }
+        
+        public bool MailboxOpen(string fullName, bool readOnly, 
+                                bool returnDetails, out MailBox info) 
+        {   info = new MailBox();
+            if(factory == null) return false;
+
+            // recent mailbox still valid?
+            if(mailboxName != null)
+            {   if(returnDetails || mailboxReadonly != readOnly || mailboxName != fullName)
+                    mailboxName = null;
+                else if(connection.TransportLayer.LastSelectTag != mailboxTag)
+                    mailboxName = null;
+                else
+                {   MonitorInfo("MailboxOpen: still valid: " + fullName);
+                    return true;
+                }
+            }
+
+            // run a SELECT or EXAMINE command
+            ZIMapCommand.Select cmd = readOnly ? factory.CreateExamine()
+                                               : factory.CreateSelect();
+            if(cmd == null) return false;
+            MonitorProgress(0);
+            
+            cmd.Queue(fullName);
+            if(!cmd.Data.Succeeded)
+            {   MonitorError("MailboxOpen: command failed: " + cmd.Data.Message);
+                cmd.Dispose();
+                return false;
+            }
+            readOnly = cmd.IsReadOnly;
+            if(returnDetails)
+            {   if(!cmd.Parse())
+                {   MonitorError("MailboxOpen: got invalid data");
+                    cmd.Dispose();
+                    return false;
+                }
+                info.Messages = cmd.Messages;
+                info.Recent   = cmd.Recent;
+                info.Unseen   = cmd.Unseen;
+            }
+            info.Name = fullName;
+            
+            // save state ...
+            mailboxName = fullName;
+            mailboxReadonly = readOnly;
+            mailboxTag = cmd.Tag;
+            cmd.Dispose();
+            MonitorProgress(100);
+            return true;
+        }
+        
+        public bool MailboxClose(bool waitForResult)
+        {   mailboxName = null;  mailboxTag = 0;
+            if(connection.TransportLayer.LastSelectTag == 0)
+                return true;
+            
+            connection.TransportLayer.LastSelectTag = 0;
+            ZIMapCommand.Close cmd = Factory.CreateClose();
+            if(cmd == null) return false;
+
+            cmd.Queue();
+            if(!Factory.EnableAutoDispose) waitForResult = true;
+            if(!waitForResult) return cmd.Execute(false);
+            
+            bool bok = cmd.Data.Succeeded;
+            cmd.Dispose();
+            return bok;
+        }
+        
+        // =====================================================================
+        // Deleting
+        // =====================================================================
+
+        public uint MailDelete(uint item, bool expunge)
+        {   return MailDelete(item, item, expunge);
+        }
+        
+        public uint MailDelete(uint firstIndex, uint lastIndex, bool expunge)
+        {   if(lastIndex < firstIndex) return 0;
+
+            ZIMapCommand.Store store = factory.CreateStore();
+            ZIMapCommand disp = store;
+            if(store == null)     return 0;
+            store.UidCommand = enableUid;
+            
+            bool bok = store.Queue(firstIndex, lastIndex, "+FLAGS (/Deleted)");
+            uint count = 0;
+            if(bok && expunge) 
+            {   ZIMapCommand.Expunge expu = factory.CreateExpunge();
+                if(expu != null)
+                {   uint[] resu = expu.Expunged;
+                    if(resu != null) count = (uint)resu.Length;
+                    disp = expu;
+                }
+            }
+            disp.Dispose();
+            return count;
+        }
+        
+        public uint MailDelete(uint [] items, bool expunge)
+        {   if(items == null)     return 0;
+            if(items.Length <= 0) return 0;
+
+            ZIMapCommand.Store store = factory.CreateStore();
+            ZIMapCommand disp = store;
+            if(store == null)     return 0;
+            store.UidCommand = enableUid;
+            
+            bool bok = store.Queue(items, "+FLAGS (/Deleted)");
+            uint count = 0;
+            if(bok && expunge) 
+            {   ZIMapCommand.Expunge expu = factory.CreateExpunge();
+                if(expu != null)
+                {   uint[] resu = expu.Expunged;
+                    if(resu != null) count = (uint)resu.Length;
+                    disp = expu;
+                }
+            }
+            disp.Dispose();
+            return count;
+        }
+        
+        // =====================================================================
+        // Searching
+        // =====================================================================
+        
+        public MailInfo[] MailSearch(string what, string charset, string search,
+                                     params string [] extra)
+        {   if(factory == null) return null;
+            ZIMapCommand.Search cmd = factory.CreateSearch();
+            if(cmd == null) return null;
+            cmd.UidCommand = enableUid;
+
+            MonitorProgress(0);
+            cmd.Queue(charset, search, extra);
+            MonitorProgress(5);
+            
+            uint [] matches = cmd.Matches;
+            if(matches == null)
+                MonitorError("MailSearch: command failed");
+            else if(matches.Length == 0)
+                MonitorInfo("MailSearch: nothing found");
+            else
+            {   MonitorInfo("MailSearch: got " + matches.Length + " matches");
+            }
+            
+            cmd.Dispose();
+            MonitorProgress(10);
+            return this.MailHeaders(matches, what);
+        }
+        
+        public uint[] MailSearch(string charset, string search, params string [] extra)
+        {   if(factory == null) return null;
+            ZIMapCommand.Search cmd = factory.CreateSearch();
+            if(cmd == null) return null;
+            cmd.UidCommand = enableUid;
+
+            MonitorProgress(0);
+            cmd.Queue(charset, search, extra);
+            MonitorProgress(90);
+            
+            uint [] matches = cmd.Matches;
+            if(matches == null)
+                MonitorError("MailSearch: command failed");
+            else if(matches.Length == 0)
+                MonitorInfo("MailSearch: nothing found");
+            else
+            {   MonitorInfo("MailSearch: got " + matches.Length + " matches");
+            }
+            
+            cmd.Dispose();
+            MonitorProgress(100);
+            return matches;
+        }
+            
+        // =====================================================================
+        // Quota 
+        // =====================================================================
+
+        /// <summary>
+        /// Return quota information for a single Mailbox.
+        /// </summary>
+        /// <param name="mailboxFullName">
+        /// Must be a full mailbox name.
+        /// </param>
+        /// <param name="storageUsage">
+        /// Number of kBytes used for message storage.
+        /// </param>
+        /// <param name="storageLimit">
+        /// Quota limit in kBytes for message storage.
+        /// </param>
+        /// <param name="messageUsage">
+        /// Number of messages used.
+        /// </param>
+        /// <param name="messageLimit">
+        /// Quota limit for messages.
+        /// </param>
+        /// <returns>
+        /// Returns an array (usually containing one element) of quota root names.
+        /// Child folders may for example return the same root name as their parent
+        /// if the have no separate quota set. On error <c>null</c> is returned.
+        /// </returns>
+        /// <remarks>
+        /// The quota root name is not always the same as the mailbox name, see
+        /// the description of the return value.
+        /// </remarks>
+        public string[] QuotaInfos(string mailboxFullName,
+                              out uint storageUsage, out uint storageLimit,
+                              out uint messageUsage, out uint messageLimit)   
+        {   messageUsage = messageLimit = storageUsage = storageLimit = 0;
+            
+            if(factory == null) return null;
+            if(string.IsNullOrEmpty(mailboxFullName))
+                mailboxFullName = mailboxName;
+            if(mailboxFullName == null) return null;
+
+            ZIMapCommand.GetQuotaRoot gqr = factory.CreateGetQuotaRoot();
+            if(gqr == null) return null;
+            gqr.Queue(mailboxFullName);
+            ZIMapCommand.GetQuotaRoot.Item[] quota = gqr.Quota;
+            
+            if(quota == null)
+                MonitorError("QuotaInfo: command failed");
+            else if(quota.Length == 0)
+                MonitorInfo("QuotaInfo: nothing found");
+            else
+            {   MonitorInfo("QuotaInfo: got " + quota.Length + " quota");
+                foreach(ZIMapCommand.GetQuotaRoot.Item item in quota)
+                {   if(item.Resource == "MESSAGE")
+                    {   messageUsage += item.Usage;
+                        messageLimit += item.Limit;
+                    }
+                    else if(item.Resource == "STORAGE")
+                    {   storageUsage += item.Usage;
+                        storageLimit += item.Limit;
+                    }
+                }
+            }
+            string[] roots = gqr.Roots;
+            gqr.Dispose();
+            return roots;
+        }
+
+        /// <summary>
+        /// Set or update quota limits.
+        /// </summary>
+        /// <param name="mailboxFullName">
+        /// Must be a full mailbox name.
+        /// </param>
+        /// <param name="storageLimit">
+        /// Quota limit in kBytes for message storage or <c>0</c> for no storage limit.
+        /// </param>
+        /// <param name="messageLimit">
+        /// Quota limit for messages or <c>0</c> for no message limit.
+        /// </param>
+        /// <returns>
+        /// A <see cref="System.Boolean"/>
+        /// </returns>
+        /// <remarks>
+        /// The <see cref="ZIMapServer.HasLimit/> is checked to see if an 
+        /// attempt to set a storage limit is ignored because the server does not
+        /// support storage limits.  The same behaviour applies to message limits.
+        /// In these cases no error status is returned.
+        /// </remarks>
+        public bool QuotaLimit(string mailboxFullName,
+                               uint storageLimit, uint messageLimit)
+        {
+            if(factory == null) return false;
+            if(string.IsNullOrEmpty(mailboxFullName))
+                mailboxFullName = mailboxName;
+            if(mailboxFullName == null) return false;
+
+            ZIMapCommand.GetQuotaRoot gqr = factory.CreateGetQuotaRoot();
+            if(gqr == null) return false;
+            if(!gqr.Queue(mailboxFullName))
+            {   MonitorError("QuotaLimits: command failed: " + gqr.Data.Message);
+                gqr.Dispose();
+                return false;
+            }
+            string root = gqr.Roots[0];
+
+            if(!Server.HasLimit("storage")) storageLimit = 0;            
+            if(!Server.HasLimit("message")) messageLimit = 0;            
+            
+            ZIMapCommand.SetQuota cmd = factory.CreateSetQuota();
+            StringBuilder sb = new StringBuilder();
+            if(messageLimit > 0) sb.Append("MESSAGE " + messageLimit);
+            if(storageLimit > 0)
+            {   if(sb.Length > 0) sb.Append(' ');
+                sb.Append("STORAGE " + storageLimit);
+            }
+            cmd.Queue(root, sb.ToString());
+            bool bok = cmd.Data.Succeeded;
+            if(!bok) MonitorError("QuotaLimits: command failed: " + cmd.Data.Message);
+            cmd.Dispose();
+            return bok;
+        }
+                
+        // =====================================================================
+        // 
+        // =====================================================================
+
+        // TODO: ZIMapApplication: RunSequence for progress bar
+        // TODO: ZIMapApplication: Nesting(level, percent) for progress bar
+        
+    }
+}
