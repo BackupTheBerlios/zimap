@@ -30,7 +30,6 @@ namespace ZIMap
 
         // TODO: Implement IMap STARTTLS command        
         // TODO: Implement IMap AUTHENTICATE command        
-        // TODO: Implement IMap RFC2342 (NAMESPACE) command       
 
         // ---------------------------------------------------------------------
         // Append
@@ -45,6 +44,13 @@ namespace ZIMap
             acmd.Queue("Spam", @"(\Seen)", System.Text.ASCIIEncoding.ASCII.GetBytes(msg));
             acmd.Execute(true);
         */
+        
+        /// <summary>
+        /// A class that handles the APPEND IMap command.
+        /// </summary>
+        /// <remarks>
+        /// The class overloads the Query() method.
+        /// </remarks>
         public class Append : Generic
         {
             public Append(ZIMapFactory parent) : base(parent, "APPEND") {}
@@ -70,6 +76,13 @@ namespace ZIMap
         // Capability
         // ---------------------------------------------------------------------
 
+        /// <summary>
+        /// A class that handles the CAPABILITY IMap command.
+        /// </summary>
+        /// <remarks>
+        /// The class overloads the <see cref="Parse(bool)"/> method and provides 
+        /// the parser result via the <see cref="Capabilities"/> property.
+        /// </remarks>
         public class Capability : Generic
         {
             public Capability(ZIMapFactory parent) : base(parent, "CAPABILITY") {}
@@ -112,6 +125,12 @@ namespace ZIMap
         // Check
         // ---------------------------------------------------------------------
 
+        /// <summary>
+        /// A class that handles the CHECK IMap command.
+        /// </summary>
+        /// <remarks>
+        /// The class adds no functionality to it's base class.
+        /// </remarks>
         public class Check : Generic
         {
             public Check(ZIMapFactory parent) : base(parent, "CHECK") {}
@@ -121,6 +140,12 @@ namespace ZIMap
         // Close
         // ---------------------------------------------------------------------
 
+        /// <summary>
+        /// A class that handles the CLOSE IMap command.
+        /// </summary>
+        /// <remarks>
+        /// The class adds no functionality to it's base class.
+        /// </remarks>
         public class Close : Generic
         {
             public Close(ZIMapFactory parent) : base(parent, "CLOSE") {}
@@ -504,6 +529,7 @@ namespace ZIMap
                     return false;
                 }
 
+                keys = keys.Trim();
                 int idx = keys.IndexOf('?');
                 if(idx < 0)
                 {   if(args != null && args.Length > 0)
@@ -515,19 +541,19 @@ namespace ZIMap
                 }
 
                 for(int iarg=0; ; iarg++)
-                {
-                    if(idx == 0 || (idx >= 0 && (args == null || args.Length <= iarg)))
+                {   if((idx == 0 && iarg == 0) ||
+                       (idx >= 0 && (args == null || args.Length <= iarg)))
                     {   Error(ZIMapErrorCode.InvalidArgument, "Search key with invalid argument: " + iarg);
                         return false;
                     }
-                    AddDirect(keys.Substring(0, idx-1));
+                    if(idx > 0) AddDirect(keys.Substring(0, idx).Trim());
                     AddString(args[iarg], true);
                     if(idx + 1 >= keys.Length) break;
                     if(keys[idx+1] == ' ') 
                     {   idx++;
                         if(idx + 1 >= keys.Length) break;
                     }
-                    keys = keys.Substring(idx + 1);
+                    keys = keys.Substring(idx + 1).Trim();
                     idx = keys.IndexOf('?');
                     if(idx < 0)
                     {   AddDirect(keys);
@@ -558,7 +584,22 @@ namespace ZIMap
             private uint    messages;
             private uint    recent;
             private uint    unseen;
+            private string  flags;
 
+            public string[] Flags
+            {   get {   Parse();
+                        if(flags == null) return null;
+                        ZIMapParser parser = new ZIMapParser(flags);
+                        if(parser.Length < 1 || parser[0].Type != ZIMapParserData.List)
+                            return null;
+                        ZIMapParser.Token[] list = parser[0].List;
+                        string[] rval = new string[list.Length];
+                        for(int irun=0; irun < list.Length; irun++)
+                            rval[irun] = list[irun].Text;
+                        return rval;
+                    }
+            }
+            
             public uint Messages
             {   get {   Parse(); return messages; }
             }
@@ -587,9 +628,11 @@ namespace ZIMap
                 if(data.Infos == null) return false;
                 if(!IsReady) return false;
 
-                // exists and recent are special...
+                // get flags. exists and recent are special...
                 foreach(ZIMapReceiveInfo i in data.Infos)            
-                {   if(i.Message == "EXISTS")
+                {   if(i.Status == "FLAGS")
+                        flags = i.Message; 
+                    else if(i.Message == "EXISTS")
                         uint.TryParse(i.Status, out messages);
                     else if(i.Message == "RECENT")
                         uint.TryParse(i.Status, out recent);

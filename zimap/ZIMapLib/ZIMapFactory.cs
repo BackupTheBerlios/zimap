@@ -66,7 +66,7 @@ namespace ZIMap
         /// </remarks>
         public string[] Capabilities
         {   get {   if(capabilities == null)
-                    {   ZIMapCommand.Capability cap = CreateCapability();   
+                    {   ZIMapCommand.Capability cap = new ZIMapCommand.Capability(this);   
                         capabilities = cap.Capabilities;
                         cap.Dispose();
                     }
@@ -129,9 +129,8 @@ namespace ZIMap
         /// </remarks>
         public char HierarchyDelimiter
         {   get {   if(hierarchyDelimiter == (char)0)
-                    {   ZIMapCommand.List list = CreateList();
+                    {   ZIMapCommand.List list = new ZIMapCommand.List(this);
                         list.Queue("", "");
-                        list.Execute(true);
                         ZIMapCommand.List.Item [] items = list.Items;
                         if(items != null && items.Length > 0)
                             hierarchyDelimiter = items[0].Delimiter;
@@ -365,14 +364,14 @@ namespace ZIMap
         private bool ExecuteWait(ZIMapCommand waitfor)
         {   while(HasRunningCommands)
             {   ZIMapReceiveData rs;
-                Monitor(ZIMapMonitor.Debug, "ExcecCommands: waiting");
+                Monitor(ZIMapMonitor.Debug, "ExecuteCommands: waiting");
                 if( ((ZIMapConnection)Parent).ProtocolLayer.Receive(out rs) )
                 {    ReceiveCompleted(rs);
                      if(waitfor != null && waitfor.Tag == rs.Tag)
                         break;
                 }
                 else
-                {   Monitor(ZIMapMonitor.Error, "ExcecCommands: receive failed");
+                {   Monitor(ZIMapMonitor.Error, "ExecuteCommands: receive failed");
                     return false;
                 }
             }
@@ -395,11 +394,14 @@ namespace ZIMap
             return cmd;
         }
 
-        private ZIMapCommand.Generic CreateByName(string name)
-        {   if(GetCommands() == null) return null;          // parent closed
-            //string name = "Command" + command;
+        public ZIMapCommand.Generic CreateByName(string name)
+        {   if(name == null || name.Length < 3) return null;
+            if(GetCommands() == null) return null;          // parent closed
+            
+                
             object[] args = { this };
-            string full =  typeof(ZIMapCommand).FullName + "+" + name; 
+            string full =  typeof(ZIMapCommand).FullName + "+" 
+                        +  char.ToUpper(name[0]) + name.Substring(1).ToLower();
             object inst = System.Reflection.Assembly.GetExecutingAssembly().CreateInstance(full,
                    false, System.Reflection.BindingFlags.CreateInstance, null, args, null, null);
             if(inst == null)
@@ -435,7 +437,7 @@ namespace ZIMap
         // =====================================================================
         // Create routines
         // =====================================================================
-
+/*
         public ZIMapCommand.Append      CreateAppend()     { return (ZIMapCommand.Append) CreateByName("Append"); } 
         public ZIMapCommand.Capability  CreateCapability() { return (ZIMapCommand.Capability) CreateByName("Capability"); } 
         public ZIMapCommand.Check       CreateCheck()      { return (ZIMapCommand.Check)  CreateByName("Check");  } 
@@ -469,12 +471,12 @@ namespace ZIMap
         public ZIMapCommand.ListRights   CreateListRights()     { return new ZIMapCommand.ListRights(this); }
         public ZIMapCommand.MyRights     CreateMyRights()       { return new ZIMapCommand.MyRights(this);   }
         public ZIMapCommand.SetACL       CreateSetACL()         { return new ZIMapCommand.SetACL(this);     }
-        
+
         // Quota commands (see www.faqs.org/rfcs/rfc2087.html)...
 
         public ZIMapCommand.GetQuota     CreateGetQuota()       { return new ZIMapCommand.GetQuota(this);    }
         public ZIMapCommand.GetQuotaRoot CreateGetQuotaRoot()   { return new ZIMapCommand.GetQuotaRoot(this);}
         public ZIMapCommand.SetQuota     CreateSetQuota()       { return new ZIMapCommand.SetQuota(this);    }
-        
+  */      
     }
 }

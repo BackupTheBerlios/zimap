@@ -1,15 +1,16 @@
 //==============================================================================
-// ZIMapConnection.cs implements the ZIMapConnection class    
+// ZIMapConnection.cs implements the ZIMapConnection class
 //==============================================================================
 
 #region Copyright 2008 Dr. Jürgen Pfennig  --  GNU Lesser General Public License
 // This software is published under the GNU LGPL license. Please refer to the
 // files COPYING and COPYING.LESSER for details. Please use the following e-mail
-// address to contact me or to send bug-reports:  info at j-pfennig dot de .  
+// address to contact me or to send bug-reports:  info at j-pfennig dot de .
 #endregion
 
 using System;
 using System.IO;
+using System.Threading;
 using System.Collections.Generic;
 
 namespace ZIMap
@@ -36,18 +37,20 @@ namespace ZIMap
     /// Limits: Literal data sent by an IMAP server can be large (many Megabytes).
     /// This implementation keeps this data in memory. There are no attempts made
     /// to limit the amount of buffered literals. Your system may go out of
-    /// memory. 
+    /// memory.
     /// </remarks>
     /// <example lang="C#">
     /// Just login and fetch a message - all error handling ignored ...
     /// <code>
-    /// | public class TestTransport
+    /// | public class TestTransport : ZIMapBase
     /// | {
     /// |     public class Transport : ZIMapTransport
     /// |     {
     /// |         // base has no def xtor ...
-    /// |         public Transport(Stream stream) : base(stream) {}
-    /// |             
+    /// |         public Transport(ZIMapBase parent) : base(parent)
+    /// |         {  Setup(parent.sock, parent.strm, 0);
+    /// |         }
+    /// |
     /// |         // must implement, abstract in base ...
     /// |         public override void Monitor(ZIMapMonitor item, string message)
     /// |         {   Console.WriteLine("Monitor {0}: {1}", item.ToString(), message);
@@ -59,28 +62,28 @@ namespace ZIMap
     /// |     public const string   user = "internet";          // username
     /// |     public const string   passwd = "xxx";             // password
     /// |     public const string   mbox = "inbox";             // mailbox
-    /// | 
+    /// |
     /// |     public Transport      tran;
     /// |     public Socket         sock;
     /// |     public NetworkStream  strm;
-    /// | 
+    /// |
     /// |     public void Init()
-    /// |     {   sock = new System.Net.Sockets.Socket(System.Net.Sockets.AddressFamily.InterNetwork, 
-    /// |                                              System.Net.Sockets.SocketType.Stream, 
+    /// |     {   sock = new System.Net.Sockets.Socket(System.Net.Sockets.AddressFamily.InterNetwork,
+    /// |                                              System.Net.Sockets.SocketType.Stream,
     /// |                                              System.Net.Sockets.ProtocolType.IP);
     /// |         sock.Connect(server, port);
     /// |         strm = new System.Net.Sockets.NetworkStream(sock);
-    /// |         tran = new Transport(strm);
+    /// |         tran = new Transport(this);
     /// |     }
-    /// | 
+    /// |
     /// |     public void Test()
     /// |     {   // read server greeting...
     /// |         string tag, status, message;
-    /// |         tran.Receive(out tag, out status, out message);             
+    /// |         tran.Receive(out tag, out status, out message);
     /// |
     /// |         // send login, read reply ...
     /// |         tran.Send(1, string.Format("LOGIN {0} \"{1}\"", user, passwd));
-    /// |         tran.Receive(out tag, out status, out message);             
+    /// |         tran.Receive(out tag, out status, out message);
     /// |
     /// |         // select mailbox, read reply ...
     /// |         tran.Send(2, string.Format("SELECT {0}", mbox));
@@ -97,7 +100,7 @@ namespace ZIMap
     /// |             if(tag != "*") break;
     /// |         }
     /// |     }
-    /// | 
+    /// |
     /// |     public static void Main(string[] args)
     /// |     {   TestTransport x = new TestTransport();
     /// |         x.Init();
@@ -108,29 +111,36 @@ namespace ZIMap
     /// </example>
     public abstract class ZIMapTransport : ZIMapBase
     {
+        // Fields set by Setup() ...
+
+        // The socket on which the stream operates
+        private System.Net.Sockets.Socket socket;
+        // Network or TLS stream for read/write
+        private Stream  stream;
+        // Timeout in seconds
+        private uint    timeout;
+        // Sent by Send() for a new Request
+        private bool    startRequest;
         // set by Send() for SELECT/EXAMINE
-        private uint            selectTag;
-        
-        private Stream          stream;
-        
-        private readonly char[] space_array = { ' ' };        
+        private uint    selectTag;
+
+        private readonly char[] space_array = { ' ' };
 
         /// <summary>
         /// Constructs an instance ready to talk to an IMap server.
         /// </summary>
-        /// <remarks>Throws an ArgumentException if the stream is not readable
-        /// or writable.</remarks>
-        /// <param name="stream">The IMap data stream that is to be used</param> 
-        public ZIMapTransport(Stream stream) : base(null)
-        {   if(!stream.CanRead || !stream.CanWrite)
-                throw new ArgumentException("Not a read+write stream");
-            this.stream = stream;
-        }
+        /// <param name="parent">
+        /// The owner if this instance, usually a <see cref="ZIMapConnection"/>.
+        /// </param>
+        /// <remarks>
+        /// The real initialization work is done by <see cref="Setup"/>.
+        /// </remarks>
+        public ZIMapTransport(ZIMapBase parent) : base(parent) {}
 
         // =====================================================================
         // Status
         // =====================================================================
-    
+
         /// <summary>
         /// Can be used to check if the server has closed the connection
         /// </summary>
@@ -142,10 +152,10 @@ namespace ZIMap
         /// it returns <c>null</c> to indicate that the server has closed the
         /// connection.
         /// </remarks>
-        public bool IsClosed 
-        {   get {   return stream == null; } 
+        public bool IsClosed
+        {   get {   return stream == null; }
         }
-        
+
         /// <summary>
         /// Can be used to check for queued server response data
         /// </summary>
@@ -154,13 +164,13 @@ namespace ZIMap
         /// literal data may still be pending.</value>
         /// <remarks>This property is a shortcut for calling <see cref="Poll"></see>
         /// with <c>0</c> as argument.</remarks>
-        public bool IsReady 
-        {   get {   return Poll(0); } 
+        public bool IsReady
+        {   get {   return Poll(0); }
         }
 
         /// <summary>
         /// This property can be used be higher IMap implementation levels to check
-        /// if the current Mailbox was changed. 
+        /// if the current Mailbox was changed.
         /// </summary>
         /// <value>
         /// Returns the tag number of the last SELECT or EXAMINE
@@ -176,7 +186,7 @@ namespace ZIMap
                         selectTag = 0;
                 }
         }
-        
+
         /// <summary>
         /// Closes the connection and the underlying stream.
         /// </summary>
@@ -195,7 +205,7 @@ namespace ZIMap
         /// Can be used to wait a short time for server responses to become available.
         /// </summary>
         /// <param name="waitMs">
-        /// The maximum time to wait in [ms]. A value of <c>0</c> will 
+        /// The maximum time to wait in [ms]. A value of <c>0</c> will
         /// return immedeately.
         /// </param>
         /// <returns>
@@ -215,11 +225,13 @@ namespace ZIMap
         {
             uint ms = 600000;                           // 10 minutes
             if(ms > waitMs) ms = waitMs;
+            ms = 10;
 
             while(true)
-            {   if(ReaderPoll(false)) return true;      // see comment WaitOne()
-                if(stream == null)    return false;
-                if(waitMs == 0)       return false;
+            {   if(ReaderPoll(false, false))            // see comment WaitOne()
+                                        return true;
+                if(stream == null)      return false;
+                if(waitMs == 0)         return false;
 
                 // check background status - must lock!
                 lock(rdr_lines)
@@ -229,12 +241,14 @@ namespace ZIMap
                 }
 
                 // wait for reader to exit - must call ReaderPoll() next !!!
-                Monitor(ZIMapMonitor.Debug, "Poll: sleeping");
+                Monitor(ZIMapMonitor.Debug, "Poll: sleeping " + ms);
                 rdr_res.AsyncWaitHandle.WaitOne((int)ms, false);
-                waitMs -= ms;
+                if(ms > waitMs) waitMs = 0;
+                else            waitMs -= ms;
+                if(ms < 200)    ms += ms;
             }
         }
-        
+
         // =====================================================================
         // Receiving
         // =====================================================================
@@ -244,24 +258,30 @@ namespace ZIMap
         {   fragment = null;
             literal = null;
 
-            // blocking read ...
+            // implement a blocking read ...
             while(!ReaderLine(out fragment))        // wait for data
-            {   if(!ReaderPoll(true))               // EOF or worse...
+            {   if(!ReaderPoll(true, false))        // EOF or worse...
                     return false;
             }
 
+            // Clear Socket timeouts after the 1st read
+            if(socket.ReceiveTimeout > 0)
+            {   socket.ReceiveTimeout = -1;
+                socket.SendTimeout = -1;
+            }
+
             // Read literal data
-            if(fragment.EndsWith("}"))
-            {
-                if(!ReaderData(out literal))
+            int ilen = fragment.Length;
+            if(ilen > 2 && fragment[ilen-1] == '}') // fragment.EndsWith("}")
+            {   if(!ReaderData(out literal))
                 {   Monitor(ZIMapMonitor.Error, "Receive: literal expected");
                     return false;
                 }
-                Monitor(ZIMapMonitor.Debug, "Receive: literal size=" + literal.Length.ToString());
+                Monitor(ZIMapMonitor.Debug, "Receive: literal size=" + literal.Length);
             }
             return true;
         }
-        
+
         /// <summary>
         /// Get a server response that can contain literal data.
         /// </summary>
@@ -271,7 +291,7 @@ namespace ZIMap
         /// </param>
         /// <param name="status">
         /// For tagged responses the returned values should be <c>OK</c>, <c>BAD</c>
-        /// or <c>NO</c>. 
+        /// or <c>NO</c>.
         /// </param>
         /// <param name="message">
         /// The response text (if any).
@@ -293,7 +313,7 @@ namespace ZIMap
         /// timeout will most likely cause confusion while reading literals - be
         /// carefull when trying to recover.
         /// </remarks>
-        public bool Receive(out string tag, out string status, 
+        public bool Receive(out string tag, out string status,
                             out string message, out byte[][] literalarray)
         {   tag = status = message = null;
             literalarray = null;
@@ -305,19 +325,19 @@ namespace ZIMap
                 return false;
 
             string[] arr = fragment.Split(space_array, 3);
-            
+
             // tag special cases: 0 -> * and return interned value ...
             tag = arr[0];
             if     (tag == "*") tag = "*";
             else if(tag == "0") tag = "*";
-     
+
             // status and message, check if strings are interned ...
             status  = (arr.Length > 1) ? arr[1] : "";
             message = (arr.Length > 2) ? arr[2] : "";
             ZIMapMonitor llev = (tag == "*") ? ZIMapMonitor.Debug : ZIMapMonitor.Info;
             if(status == "")
                 Monitor(ZIMapMonitor.Error, "Receive: empty message");
-            else 
+            else
             {   string sint = string.IsInterned(status);
                 if(sint != null) status = sint;
             }
@@ -326,7 +346,8 @@ namespace ZIMap
                 if(sint != null) message = sint;
             }
             if(literal == null)
-            {   Monitor(llev, "Receive: message: " + fragment);
+            {   if(MonitorLevel <= llev) 
+                    Monitor(llev, "Receive: message: " + fragment);
                 return true;
             }
 
@@ -360,7 +381,7 @@ namespace ZIMap
         /// </param>
         /// <param name="status">
         /// For tagged responses the returned values should be <c>OK</c>, <c>BAD</c>
-        /// or <c>NO</c>. 
+        /// or <c>NO</c>.
         /// </param>
         /// <param name="message">
         /// The response text (if any).
@@ -387,11 +408,11 @@ namespace ZIMap
                 Monitor(ZIMapMonitor.Error, "Receive: literal data ignored");
             return true;
         }
-       
+
         // =====================================================================
         // Sending
         // =====================================================================
-        
+
         /// <summary>
         /// Sends a message tag followed by a text.
         /// </summary>
@@ -408,6 +429,20 @@ namespace ZIMap
         /// CR/LF are automatically appended. This is also correct if the message
         /// text ends with "{nnn}" to indicate that the client wants to send a
         /// literal. The command flushes the stream.
+        /// <para />
+        /// This overload of Send is aware of some special commands:
+        /// <list type="table">
+        /// <item>
+        /// <term>SELECT</term><description>stores the tag value for
+        /// <see cref="LastSelectTag"/></description>
+        /// <term>EXAMINE</term><description>stores the tag value for
+        /// <see cref="LastSelectTag"/></description>
+        /// <term>CLOSE</term><description>stores the tag value for
+        /// <see cref="LastSelectTag"/></description>
+        /// <term>STARTTLS</term><description>Enters a special single
+        /// line read mode</description>
+        /// </item>
+        /// </list>
         /// </remarks>
         public bool Send(uint tag, string message)
         {
@@ -415,21 +450,28 @@ namespace ZIMap
             {   Error(ZIMapErrorCode.InvalidArgument, "No command to send");
                 return false;
             }
-            
-            // for the LastSelectTag property ...
+
+            // Extras for the LastSelectTag property and STARTTLS
             int ibrk = message.IndexOf(' ');
             string cmd = ibrk > 0 ? message.Substring(0, ibrk) : message;
             cmd = cmd.ToUpper();
             if(cmd == "SELECT" || cmd == "EXAMINE" || cmd == "CLOSE")
                 selectTag = tag;
-                
+            else if (cmd == "STARTTLS")             // enter single line mode
+                ReaderStop(0);
+
+            // send to command ...
             System.Text.StringBuilder sb = new System.Text.StringBuilder(message.Length + 12);
             if(tag == 0)
                 sb.Append("* ");
             else
                 sb.AppendFormat("{0:x} ", tag);
             sb.Append(message);
-            return Send(sb.ToString());
+            startRequest = true;
+            bool bok = Send(sb.ToString());
+
+            if(cmd == "STARTTLS") ReaderStop(1);    // extras for STARTTLS
+            return bok;
         }
 
         /// <summary>
@@ -437,14 +479,14 @@ namespace ZIMap
         /// </summary>
         /// <param name="fragment">
         /// The message text (usually starting whith a space if the command continues
-        /// after a literal). 
+        /// after a literal).
         /// </param>
         /// <returns>
         /// - <c>true</c> on success.
         /// </returns>
         /// <remarks>
         /// CR/LF are automatically appended. This is also correct if the message
-        /// text ends with "{nnn}" to indicate that the client wants to send 
+        /// text ends with "{nnn}" to indicate that the client wants to send
         /// another literal. The command flushes the stream.
         /// </remarks>
         public bool Send(string fragment)
@@ -458,7 +500,9 @@ namespace ZIMap
             }
 
             if(fragment.Length > 0)
-            {   Monitor(ZIMapMonitor.Info, "Send: fragment: '" + fragment + "'");
+            {   if(this.MonitorLevel <= ZIMapMonitor.Info)
+                    Monitor(ZIMapMonitor.Info, (startRequest ?
+                        "Send: request: " : "Send: fragment: ") + fragment);
                 byte[] data = System.Text.ASCIIEncoding.ASCII.GetBytes(fragment);
                 stream.Write(data, 0, data.Length);
             }
@@ -467,14 +511,15 @@ namespace ZIMap
             stream.WriteByte(13);
             stream.WriteByte(10);
             stream.Flush();
+            startRequest = false;
             return true;
         }
-        
+
         /// <summary>
         /// Sends binary data, usually a literal.
         /// </summary>
         /// <param name="data">
-        /// The data. 
+        /// The data.
         /// </param>
         /// <returns>
         /// - <c>true</c> on success.
@@ -489,7 +534,7 @@ namespace ZIMap
             {   Monitor(ZIMapMonitor.Error, "Send: closed");
                 return false;
             }
-            Monitor(ZIMapMonitor.Info, "Send: " + data.Length.ToString() + " bytes");
+            Monitor(ZIMapMonitor.Info, "Send: " + data.Length + " bytes");
             stream.Write(data, 0, data.Length);
             return true;
         }
@@ -533,7 +578,7 @@ namespace ZIMap
             int nlast;                                  // last byte not LF
             int nsize;                                  // current buffer size
             const int ninit = 2048;                     // initial buffer size (2**n)
-            
+
             while(!bquit)
             {   nlast = rdr_bused;                      // no LF in buffer!
 
@@ -544,44 +589,40 @@ namespace ZIMap
                 }
                 else
                     nsize = rdr_buffer.Length;
-                
+
                 // let buffer grow as needed
                 if(rdr_bused >= nsize)
                 {   nsize *= 4;
-                    /*
-                    byte[] curr = rdr_buffer;
-                    rdr_buffer = new byte[nsize];
-                    curr.CopyTo(rdr_buffer, 0);
-                    */
                     Array.Resize(ref rdr_buffer, nsize);
-                    Monitor(ZIMapMonitor.Info, "ReaderImpl: buffer size=" + nsize.ToString());
+                    Monitor(ZIMapMonitor.Debug, "ReaderImpl: buffer size=" + nsize.ToString());
                 }
-                
+
                 // read from socket
+
                 int bcnt = ReaderRead(rdr_buffer, rdr_bused, nsize-rdr_bused);
                 if(bcnt < 0)                            // exception (timeout)
-                    return;
+                     break;
                 if(bcnt == 0)                           // closed...
                 {   lock(rdr_lines)
                     {   rdr_lines.Add(null);
                     }
                     Monitor(ZIMapMonitor.Info, "ReaderImpl: connection closed");
-                    break;
+                    return;
                 }
                 rdr_bused += bcnt;
-                
+
                 // search for line breaks ...
-                while(nlast < rdr_bused)              
+                while(nlast < rdr_bused)
                 {   bcnt = Array.IndexOf<byte>(rdr_buffer, (byte)10, nlast, rdr_bused-nlast);
                     if(bcnt < 0) break;                 // no more line ...
-                    
+
                     // extract line ...
-                    nlast = bcnt + 1;                   // start index of next line 
-                    if(bcnt > 0 && rdr_buffer[bcnt-1] == (byte)13) 
+                    nlast = bcnt + 1;                   // start index of next line
+                    if(bcnt > 0 && rdr_buffer[bcnt-1] == (byte)13)
                         bcnt--;                         // remove the CR of CR/LF
                     string line = System.Text.ASCIIEncoding.ASCII.GetString(rdr_buffer, ndone, bcnt-ndone);
                     ndone = nlast;
-                    
+
                     // does the server announce literal data?
                     byte[] data = null;                 // for literal data
                     if(line.EndsWith("}"))
@@ -594,14 +635,14 @@ namespace ZIMap
                                 int bleft = rdr_bused - ndone;
                                 if(bleft > bcnt) bleft = bcnt;
                                 Monitor(ZIMapMonitor.Debug, "ReaderImpl: literal of size " + bcnt);
-                                
+
                                 // copy data that is still in the buffer...
                                 if(bleft > 0)
                                 {   Array.Copy(rdr_buffer, ndone, data, bdata,  bleft);
                                     bcnt -= bleft; bdata += bleft; ndone += bleft;
                                     nlast = ndone;                      // skip for CR/LF search
                                 }
-                                
+
                                 // read more data from server...
                                 while(bcnt > 0)
                                 {   nlast = ndone = rdr_bused;          // no data left in buffer
@@ -616,13 +657,12 @@ namespace ZIMap
                             }
                         }
                     }
-                    
+
                     // anything left in the buffer? Reset or delete buffer if no...
                     if(ndone >= rdr_bused)
                     {   ndone = rdr_bused = 0;
                         if(nsize > ninit) rdr_buffer = null;
                     }
-                    
                     //Monitor(ZIMapMonitor.Debug, "ReaderImpl: line: '" + line + "'");
 
                     // add text (and literal) to the data list ...
@@ -643,20 +683,38 @@ namespace ZIMap
                     ndone = 0; rdr_bused = bcnt;
                 }
             }
+            Monitor(ZIMapMonitor.Debug, "ReaderImpl: quit");
         }
 
-        // Wrapper mainly to catch timeouts 
+        // Wrapper mainly to catch timeouts
         private int ReaderRead(byte[] buffer, int offs, int length)
         {
             try
             {   return stream.Read(buffer, offs, length);
             }
-            catch(IOException ex)
-            {   Monitor(ZIMapMonitor.Info, "ReaderRead: exception: " + ex.Message);
+            catch(Exception ex)
+            {   // HACK: ms leaves socket non-blocking after timeout
+                socket.Blocking = true;
+
+                if(rdr_dlg == null)
+                {   Monitor(ZIMapMonitor.Debug, "ReaderRead: Reader was stopped");
+                    return -1;
+                }
+                Exception inner = ex.InnerException;
+                if(inner.InnerException != null && inner is IOException) inner = inner.InnerException;
+                if(inner is System.Net.Sockets.SocketException &&
+                   (inner.Message.Contains("timed out") ||
+                    inner.Message.Contains("period of time")))
+                    Monitor(ZIMapMonitor.Debug, "ReaderRead: Timeout");
+                else
+                {   Monitor(ZIMapMonitor.Error, "ReaderRead: exception: " + ex.Message);
+                    if(inner != null)
+                        Monitor(ZIMapMonitor.Info, "ReaderRead: exception: " + inner.Message);
+                }
                 return -1;
             }
         }
-        
+
         /// <summary>
         /// Get the next buffered server response or return an error
         /// status if nothing is buffered.
@@ -719,8 +777,8 @@ namespace ZIMap
         /// <returns>
         /// - <c>true</c> on success (even on the EOF).
         /// <para />
-        /// - <c>false</c> if there is no literal data (timeout) -or- 
-        /// after <see cref="Close"/>. 
+        /// - <c>false</c> if there is no literal data (timeout) -or-
+        /// after <see cref="Close"/>.
         /// </returns>
         protected bool ReaderData(out byte[] data)
         {   data = null;
@@ -738,12 +796,16 @@ namespace ZIMap
             }
             return true;                            // have data (or EOF)
         }
-        
+
         /// <summary>
         /// Checks if received data is queued and optionally waits.
         /// </summary>
         /// <param name="bWait">
         /// A value of <c>true</c> makes this call blocking.
+        /// </param>
+        /// <param name="bSingle">
+        /// A value of <c>true</c> causes the reader thread to stop
+        /// after the next line received (single line mode).
         /// </param>
         /// <returns>
         /// - <c>true</c> if data is queued.
@@ -752,43 +814,107 @@ namespace ZIMap
         /// The underlying IMAP TCP/IP stream may have a timeout set, which can
         /// (when expired) cause this routine to return from blocking state.
         /// </remarks>
-        protected bool ReaderPoll(bool bWait)
+        protected bool ReaderPoll(bool bWait, bool bSingle)
         {   if(stream == null) return false;        // called after close()
-            
+
             // initialize the reader
-            if(rdr_dlg == null)
-            {   rdr_lines = new List<object>();
+            if(rdr_dlg == null)                     // see also ReaderStop()
+            {   if(rdr_lines == null)               // only once
+                    rdr_lines = new List<object>();
                 rdr_dlg = new Reader(ReaderImpl);
                 Monitor(ZIMapMonitor.Debug, "ReaderPoll: Initialise Reader");
                 rdr_res = rdr_dlg.BeginInvoke(null, null);
             }
-            
+
             // check background status - must lock!
             lock(rdr_lines)
             {   if(rdr_res.IsCompleted && stream != null)
                 {   Monitor(ZIMapMonitor.Debug, "ReaderPoll: Continue Reader");
                     rdr_dlg.EndInvoke(rdr_res);     // would re-throw exception
-                    rdr_wait = false;
                     rdr_res = rdr_dlg.BeginInvoke(null, null);
                 }
-                if (rdr_lines.Count > 0)            // has line in buffer
-                    return true;
-                rdr_wait = bWait;                   // request reader to stop
+                
+                bool bok = rdr_lines.Count > 0;
+                if(bSingle) 
+                {   rdr_wait = true;                // single line: request stop
+                    if(bok) return true;
+                }
+                else
+                {   if(bok) return true;
+                    rdr_wait = bWait;               // for wait: request stop
+                }
             }
-            
+
             // lock released - have no input
             if(!bWait)                              // no wait
                 return false;
 
-            rdr_res.AsyncWaitHandle.WaitOne();      // wait for data
+            // wait for the reader thread
+            if(timeout == 0)
+                rdr_res.AsyncWaitHandle.WaitOne();  // wait forever
+            else
+                if(!rdr_res.AsyncWaitHandle.WaitOne((int)timeout*1000, false))
+                {   Monitor(ZIMapMonitor.Error, "ReaderPoll: Timeout ");
+                    return false;
+                }
 
-            // if the underlying stream has a timeout the delegate will
-            // return as completed with the list being still empty ...
+            // restart reader (recurse without wait) ...
+            return ReaderPoll(false, bSingle);
+        }
 
-            if(ReaderPoll(false))                   // recurse (without wait)
-                return true;                        // ok - data
-            Monitor(ZIMapMonitor.Error, "ReaderPoll: Timeout");
-            return false;                           // bang!
+        // ---------------------------------------------------------------------
+        // enter single line mode
+        // ---------------------------------------------------------------------
+        // Code required for STARTTLS: transport must not have a pending socket
+        // read because this would block the TLS negotiation. For the windows
+        // version this is really a problem: if we try to read, causing a wait,
+        // the socket lib would somehow keep to socket blocked, even after the
+        // data was returned by the read request. For windows the whole thing
+        // only works if we can read the data entirely from the stream buffer...
+        // ---------------------------------------------------------------------
+        private bool ReaderStop(uint umod)
+        {   if(stream == null) return false;        // called after close()
+            if(rdr_res == null) return false;       // unexpected
+
+            if (umod == 0)
+            {   Monitor(ZIMapMonitor.Debug, "ReaderStop: single line");
+                ReaderPoll(false, true);
+            }
+            else
+            {
+                // HACK: wait 300ms (MS Socket lib blocks when read causes wait)
+                //if(socket.Poll(300000, System.Net.Sockets.SelectMode.SelectRead))
+                //    Monitor(ZIMapMonitor.Debug, "ReaderStop: ready");
+                System.Threading.Thread.Sleep(300);
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// Changes the current IMap data stream.
+        /// </summary>
+        /// <param name="socket">The socket on whicht the stream is based.</param>
+        /// <param name="stream">The IMap data stream that is to be used.</param>
+        /// <param name="timeout">Command timeout in [s].</param>
+        /// <remarks>
+        /// Throws an ArgumentException if the stream is not readable
+        /// or not writable.
+        /// <para />
+        /// No socket timeouts are used by this class, socket reading is done in
+        /// background by a worker thread.  The blocking read timeouts after the
+        /// given time (see <see cref="Receive"/>).
+        /// </remarks>
+        public void Setup(System.Net.Sockets.Socket socket,
+                          Stream stream, uint timeout)
+        {
+            this.timeout = timeout;
+            if (socket != null)
+                this.socket = socket;
+            if (stream != null)
+            {   if (!stream.CanRead || !stream.CanWrite)
+                    throw new ArgumentException("Not a read+write stream");
+                this.stream = stream;
+            }
         }
     }
 }

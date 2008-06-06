@@ -77,7 +77,7 @@ namespace ZIMap
     /// Holds the server replies to a command.
     /// </summary>
     /// <remarks>
-    /// Usually created by <see cref="ZIMapProtocol.Receive(ZIMapReceiveData)"/>
+    /// Usually created by <see cref="ZIMapProtocol.Receive(ZIMap.ZIMapReceiveData)"/>
     /// and consumed by <see cref="ZIMapCommand.ReceiveCompleted"/>.
     /// </remarks>
     public struct ZIMapReceiveData
@@ -156,6 +156,20 @@ namespace ZIMap
     // Classes
     //==========================================================================
 
+    /// <summary>
+    /// This class implements the protocol layer of ZIMapLib.
+    /// </summary>
+    /// <remarks>
+    /// The most important work done here is the handling of sending IMap literal
+    /// data (receiving literals is handled by the transport layer, see
+    /// <see cref="ZIMapTransport"/>).
+    /// <para />
+    /// The second important point is the setup of TLS (Transport Layes Security).
+    /// This happens when the <see cref="ServerGreeting"/> property does it's work,
+    /// see <see cref="ZIMapConnection.StartTls"/>.  An alternate way of initializing
+    /// TLS is the use of a special port number (IMAPS) which is handled entierly in
+    /// <see cref="ZIMapConnection"/>.
+    /// </remarks>
     public abstract class ZIMapProtocol : ZIMapBase
     {
         private readonly ZIMapTransport  transport;
@@ -175,7 +189,7 @@ namespace ZIMap
         /// If this property is not set to <c>uint.MaxValue</c> (which is the default)
         /// the server reponses will be checked for "* nn EXISTS" messages and on
         /// reception of such a message this property will be updated and a
-        /// <see cref="ZMApMonitorInfo.Message"/> callback will be made. Set this 
+        /// <see cref="ZIMapMonitor.Messages"/> callback will be made. Set this 
         /// property to <c>0</c> to enable callbacks and to <c>uint.MaxValue</c> to
         /// disable them. By default these callbacks are disabled to save time. 
         /// </value>
@@ -184,10 +198,24 @@ namespace ZIMap
             set {   exists_cnt = value; }
         }
 
+        /// <value>
+        /// Returns the server greeting.
+        /// </value>
+        /// <remarks>
+        /// The server sends this after the client got connected. If the greeting has
+        /// not yet arrived this code sends a <c>NOOP</c> command to synchronized with
+        /// the server.
+        /// <para />
+        /// This property is implicitly called before the protocol layer sends the first
+        /// command to the server. The server response stays cached. 
+        /// <para />
+        /// Because of being called before the first send, this property is also used
+        /// to initialze TLS, see <see cref="ZIMapConnection.StartTls"/>.
+        /// </remarks>
         public string ServerGreeting 
         {   get {   if(greeting != null) return greeting;
                     if(transport == null) return "";
-                    Monitor(ZIMapMonitor.Debug, "ServerGreeting: fetching");
+                    Monitor(ZIMapMonitor.Debug, "ServerGreeting: poll");
                     bool bok = false;
                     uint tag = 0;
                     string status, message;
@@ -195,22 +223,26 @@ namespace ZIMap
                     bok = transport.Poll(1000);              // should be in buffer!
                     if(bok)
                     {   rsta = Receive(out tag, out status, out greeting);
-                        if(rsta == ZIMapReceiveState.Info)
-                            return greeting;
+                        if(rsta != ZIMapReceiveState.Info) greeting = null;
                     }
-                    else if(transport.Send("* NOOP"))
-                    {   while(true)
+                                                            // use a NOOP to sync                
+                    if(greeting == null && transport.Send("* NOOP"))
+                    {   Monitor(ZIMapMonitor.Error,
+                                "ServerGreeting: Got no greeting, try to resync"); 
+                        while (true)
                         {   rsta = Receive(out tag, out status, out message);
                             if(rsta == ZIMapReceiveState.Info)
                                 greeting = message;
-                            else if(rsta == ZIMapReceiveState.Ready)
-                                return greeting;
                             else 
                                 break;
                         }
                     }
-                    Error(ZIMapErrorCode.CannotConnect, "Invalid or missing greeting");
-                    return "";
+                    if(greeting == null)
+                    {   greeting = "";   
+                        Error(ZIMapErrorCode.CannotConnect, "Invalid or missing greeting");
+                    }
+                    connection.StartTls(++send_cnt);
+                    return greeting;
                 } 
         }
         
@@ -382,6 +414,7 @@ namespace ZIMap
             return 0;
         }
             
+        // internal helper to process a single response line
         private ZIMapReceiveState Receive(ref ZIMapReceiveData data, out byte[][] literals)
         {   literals = null;
             if(transport == null)                        // connection is closed
@@ -394,7 +427,7 @@ namespace ZIMap
             {   string tags;
                 if(transport.Receive(out tags, out data.Status,
                                      out data.Message, out literals))
-                {
+                {     
                     // --- check the tag ---
 
                     if(tags == "*" || tags == "0")
@@ -445,6 +478,17 @@ namespace ZIMap
             return ZIMapReceiveState.Exception;
         }
         
+        /// <summary>
+        /// Receive a single line of an IMap reply (no literals)
+        /// </summary>
+        /// <param name="tag"><c>0</c> for an untagged response or the
+        /// tag number of the command.</param>
+        /// <param name="status">The status text like OK, NO or BAD</param>
+        /// <param name="message">The response text.</param>
+        /// <returns>A value indicating success or failure.</returns>
+        /// <remarks>
+        /// A convenience overload that ignores literals.
+        /// </remarks>
         public ZIMapReceiveState Receive(out uint tag, out string status, out string message)
         {   ZIMapReceiveData data = new ZIMapReceiveData();
             ZIMapReceiveState stat = Receive(ref data, out data.Literals);
@@ -456,10 +500,17 @@ namespace ZIMap
             return stat;
         }
 
+        /// <summary>
+        /// Receive a complete IMap reply including literals and untagged
+        /// responses.
+        /// </summary>
+        /// <param name="data">A structure containing the received data.</param>
+        /// <returns><c>true</c> on success.</returns>
         public bool Receive(out ZIMapReceiveData data)
         {   data = new ZIMapReceiveData();
             data.ReceiveState = Receive(ref data, out data.Literals);
             
+            // fetch all info data and all literals ...
             if(data.ReceiveState == ZIMapReceiveState.Info)
             {   List<string>    infos = new List<string>();
                 List<byte[]>    multi = null;
@@ -481,6 +532,7 @@ namespace ZIMap
                     }
                 } while(data.ReceiveState == ZIMapReceiveState.Info);
 
+                // process the received info data array ...
                 int icnt = infos.Count / 2;
                 data.Infos = new ZIMapReceiveInfo[icnt];
                 for(int irun=0; irun < icnt; irun++)

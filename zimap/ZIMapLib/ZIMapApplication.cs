@@ -22,8 +22,8 @@ namespace ZIMap
     /// Class that implement the Application layer of ZIMap.
     /// </summary>
     /// <remarks>
-    /// The <b>application<b> layer it the top-most of three layers. The others
-    /// are the command and the protocol layers.
+    /// The application layer is the top-most of the four ZIMapLib layers. The others
+    /// are the command, the protocol and the transport layers.
     /// </remarks>
     public class ZIMapApplication
     {
@@ -42,9 +42,13 @@ namespace ZIMap
         private uint            progress = 100;
         
         // feature flags ...
+        private bool            enableNamespaces = true;
+        private bool            enableRights = true;
+        private bool            enableQuota = true;
+        private bool            enableUid = true;
+
         private bool            enableMessages;
         private bool            enableProgress;
-        private bool            enableUid;
             
         // see OpenMailbox ...
         private string          mailboxName;
@@ -70,6 +74,56 @@ namespace ZIMap
             set {   enableMessages = value; }
         }
 
+        /// <summary>
+        /// Controls if the IMap NAMESPACE feature is used
+        /// </summary>
+        /// <remarks>
+        /// If set <c>true</c> before <see cref="Connect(string, string)"/> the server
+        /// capabilities are used to disable this feature if it is not available.
+        /// This would reset the propertie's value to <c>false</c>.
+        /// </remarks>
+        public bool EnableNamespaces
+        {   get {   return enableNamespaces;  }
+            set {   if(enableNamespaces == value) return;   
+                    enableNamespaces = value;
+                    server = null;
+                }
+        }
+
+        /// <summary>
+        /// Controls if the IMap QUOTA feature is used
+        /// </summary>
+        /// <remarks>
+        /// If set <c>true</c> before <see cref="Connect(string, string)"/> the server
+        /// capabilities are used to disable this feature if it is not available.
+        /// This would reset the propertie's value to <c>false</c>.
+        /// </remarks>
+        public bool EnableQuota
+        {   get {   return enableQuota;  }
+            set {   enableQuota = value; }
+        }
+
+        /// <summary>
+        /// Controls if the IMap ACL feature is used
+        /// </summary>
+        /// <remarks>
+        /// If set <c>true</c> before <see cref="Connect(string, string)"/> the server
+        /// capabilities are used to disable this feature if it is not available.
+        /// This would reset the propertie's value to <c>false</c>.
+        /// </remarks>
+        public bool EnableRights
+        {   get {   return enableRights;  }
+            set {   enableRights = value; }
+        }
+        
+        /// <summary>
+        /// Controls if the IMap UID feature is used
+        /// </summary>
+        /// <remarks>
+        /// If set <c>true</c> before <see cref="Connect(string, string)"/> the server
+        /// capabilities are used to disable this feature if it is not available.
+        /// This would reset the propertie's value to <c>false</c>.
+        /// </remarks>
         public bool EnableUidCommands
         {   get {   return enableUid;  }
             set {   enableUid = value; }
@@ -104,7 +158,8 @@ namespace ZIMap
         }
         
         public ZIMapServer Server
-        {   get {   if(server == null) server = ZIMapServer.Create(factory);   
+        {   get {   if(server == null) 
+                        server = ZIMapServer.Create(factory, EnableNamespaces);   
                     return server; 
                 }
             set {   if(value == null) MonitorError("Cannot assign null");
@@ -116,7 +171,7 @@ namespace ZIMap
         {   get {   return timeout; }
             set {   timeout = value;
                     if(connection != null) 
-                        connection.TransportTimeout = (int)(Timeout * 1000);
+                        connection.TransportTimeout = timeout;
                 }
         }
         
@@ -151,11 +206,13 @@ namespace ZIMap
         
         public void MonitorError(string message)
         {   if(progress != 100) MonitorProgress(100);
+            if(string.IsNullOrEmpty(message)) return;
             ZIMapConnection.Monitor(factory, "ZIMapApplication", ZIMapMonitor.Error, message);
         }
         
         public void MonitorInfo(string message)
-        {   if(monitorLevel <= ZIMapMonitor.Info)
+        {   if(string.IsNullOrEmpty(message)) return;
+            if(monitorLevel <= ZIMapMonitor.Info)
                 ZIMapConnection.Monitor(factory, "ZIMapApplication", ZIMapMonitor.Info, message);
         }
         
@@ -179,18 +236,31 @@ namespace ZIMap
         // =====================================================================
         // Connect and Disconnect 
         // =====================================================================
+
+        private void CheckCapability(string capability, bool clear, ref bool flag)
+        {   if(Factory.HasCapability(capability))
+                MonitorInfo("Connect: server supports " + capability);
+            else if(flag && !clear)
+            {   flag = false;
+                MonitorInfo("Connect: server does not support " + capability);
+            }
+        }
         
         public bool Connect(string user, string password)
+        {   return Connect(user, password, ZIMapConnection.TlsModeEnum.Automatic);
+        }
+        
+        public bool Connect(string user, string password, ZIMapConnection.TlsModeEnum tlsMode)
         {
             // step 1: Open a new connection and get factory ...
             MonitorProgress(0);
             if(connection != null) Disconnect();
 
-            connection = ZIMapConnection.GetConnection(ServerName, ServerPort);
+            connection = ZIMapConnection.GetConnection(ServerName, ServerPort,
+                                                       tlsMode, timeout);
             if(connection != null)
             {   connection.MonitorLevel = MonitorLevel;
-                MonitorProgress(25);
-                if(Timeout >= 0) connection.TransportTimeout = (int)(Timeout * 1000);
+                MonitorProgress(20);
                 factory = connection.CommandLayer;
             }
             if(factory == null)
@@ -203,27 +273,38 @@ namespace ZIMap
             SetMonitorLevel(monitorLevel, monitorAll);
             
             // step 2: login
-            MonitorInfo("Connect: server greeting: " + connection.ProtocolLayer.ServerGreeting);
-            MonitorProgress(50);
+            string greeting = connection.ProtocolLayer.ServerGreeting;
+            MonitorInfo("Connect: server greeting: " + greeting);
+            MonitorProgress(40);
             
-            ZIMapCommand.Login cmd = factory.CreateLogin();
+            ZIMapCommand.Login cmd = new ZIMapCommand.Login(factory);
             cmd.Queue(user, password);
             if(!cmd.Data.Succeeded)
             {   MonitorError("Connect: login failed");
                 return false;
             }
             username = user;
-            MonitorProgress(75);
+            MonitorProgress(60);
             
             // set 3: get server configuration
 
-            if(connection.ProtocolLayer.ServerGreeting.ToLower().Contains("cyrus"))
-                MonitorInfo("Connect: server is Cyrus");
-            if(Factory.HasCapability("ACL"))
-                MonitorInfo("Connect: server supports ACL");
-            if(Factory.HasCapability("QUOTA"))
-                MonitorInfo("Connect: server supports QUOTA");
-// TODO: ZIMapApplication: Connect server config
+            bool bIMap = true;
+            CheckCapability("IMAP4rev1", false, ref bIMap);
+            CheckCapability("NAMESPACE", bIMap, ref enableNamespaces);
+            CheckCapability("QUOTA",     false, ref enableQuota);
+            CheckCapability("ACL",       false, ref enableRights);
+            CheckCapability("UIDPLUS",   bIMap, ref enableUid);
+            MonitorProgress(80);
+            
+            // step4: get Namespace info
+            if(enableNamespaces)
+            {   if(Server.NamespaceData(ZIMapServer.Personal).Valid)
+                    MonitorInfo("Connect: NAMESPACE enabled");
+                else
+                {   MonitorInfo("Connect: NAMESPACE disabled (not supported)");
+                    enableNamespaces = false;
+                }
+            }
             MonitorProgress(100);
             return true;
         }
@@ -231,7 +312,10 @@ namespace ZIMap
         public void Disconnect()
         {
             if(factory != null && IsLoggedIn)
-                factory.CreateLogout().Execute(true);
+            {   ZIMapCommand.Logout cmd = new ZIMapCommand.Logout(factory);
+                cmd.Execute(true);
+                cmd.Dispose();
+            }
             if(connection != null)
             {   connection.Close();
                 MonitorInfo("Disconnect: done");
@@ -250,6 +334,7 @@ namespace ZIMap
         public struct  MailBox
         {   public string   Name;
             public string[] Attributes;
+            public string[] Flags;
             public char     Delimiter;   
             public bool     Subscribed;            
             public uint     Messages;
@@ -272,9 +357,8 @@ namespace ZIMap
         /// </param>
         /// <param name="subscribed">
         /// A number indicating if the subscription status should by loaded (for
-        /// <c>subscribed != 0<c>, if the status should be loaded (<c>1<c>) or
+        /// <c>subscribed != 0</c>, if the status should be loaded (<c>1</c>) or
         /// if only subscribed mailboxes should be returned (<c>2</c>). 
-        ///  <c>true</c> only subcribed folders are considered.
         /// </param>
         /// <param name="detailed">
         /// When <c>false</c> only the mailbox name and the subscription status are
@@ -288,8 +372,8 @@ namespace ZIMap
                                    uint subscribed, bool detailed)
         {
             if(factory == null) return null;
-            ZIMapCommand.List cmdList = (subscribed == 2) ? factory.CreateLsub()
-                                                          : factory.CreateList();
+            ZIMapCommand.List cmdList = 
+                (ZIMapCommand.List)factory.CreateByName((subscribed == 2) ? "LSUB" : "LIST");
             if(cmdList == null) return null;
             MonitorProgress(0);
 
@@ -322,7 +406,7 @@ namespace ZIMap
                 mbox[irun].Attributes = i.Attributes;
                 mbox[irun].Subscribed = (subscribed == 2);
                 if(detailed)
-                {   ZIMapCommand.Examine cmd = factory.CreateExamine();
+                {   ZIMapCommand.Examine cmd = new ZIMapCommand.Examine(factory);
                     cmd.UserData = irun;
                     cmd.Queue(i.Name);
                 }
@@ -370,6 +454,7 @@ namespace ZIMap
                 mbox[irun].Messages = cmd.Messages;
                 mbox[irun].Recent   = cmd.Recent;
                 mbox[irun].Unseen   = cmd.Unseen;
+                mbox[irun].Flags    = cmd.Flags;
                 uint prog = 30 + (uint)((irun * 70.0) / mbox.Length);
                 MonitorProgress(Math.Min(prog, 99)); 
             }
@@ -404,7 +489,7 @@ namespace ZIMap
         }
         
         public MailInfo[] MailHeaders()
-        {   return MailHeaders(0, uint.MaxValue, null);
+        {   return MailHeaders(1, uint.MaxValue, null);
         }
         
         public MailInfo[] MailHeaders(uint firstIndex, uint lastIndex, string what) 
@@ -412,7 +497,7 @@ namespace ZIMap
             if(lastIndex < firstIndex) return null;
             if(factory == null) return null;
 
-            ZIMapCommand.Fetch fetch = factory.CreateFetch();
+            ZIMapCommand.Fetch fetch = new ZIMapCommand.Fetch(factory);
             if(fetch == null) return null;
             MonitorProgress(0);
 
@@ -497,7 +582,7 @@ namespace ZIMap
         /// An array of mail headers (may be zero-sized) or <c>null</c> on error.
         /// </returns>
         /// <remarks>
-        /// This method is used by <see cref="MailSearch(string, string, params string[])"/>.
+        /// This method is used by <see cref="MailSearch(string, string, string[])"/>.
         /// It is recommended to set <see cref="EnableUidCommands"/> to <c>true</c>. 
         /// </remarks>
         public MailInfo[] MailHeaders(uint[] ids, string what) 
@@ -505,7 +590,7 @@ namespace ZIMap
             if(ids == null || ids.Length < 1) return null;
             if(factory == null) return null;
 
-            ZIMapCommand.Fetch fetch = factory.CreateFetch();
+            ZIMapCommand.Fetch fetch = new ZIMapCommand.Fetch(factory);
             if(fetch == null) return null;
             MonitorProgress(0);
             fetch.UidCommand = enableUid;
@@ -524,6 +609,9 @@ namespace ZIMap
                     factory.DisposeCommands(null, false);
                     return null;
                 }
+                rval = new MailInfo[part.Length];
+                for(uint irun=0; irun < part.Length; irun++)
+                    rval[irun] = new MailInfo(part[irun]);
             }
             else
             {   List<MailInfo> items = new List<MailInfo>();
@@ -629,8 +717,8 @@ namespace ZIMap
             }
 
             // run a SELECT or EXAMINE command
-            ZIMapCommand.Select cmd = readOnly ? factory.CreateExamine()
-                                               : factory.CreateSelect();
+            ZIMapCommand.Select cmd = 
+                (ZIMapCommand.Select)factory.CreateByName(readOnly ? "EXAMINE" : "SELECT");
             if(cmd == null) return false;
             MonitorProgress(0);
             
@@ -668,7 +756,7 @@ namespace ZIMap
                 return true;
             
             connection.TransportLayer.LastSelectTag = 0;
-            ZIMapCommand.Close cmd = Factory.CreateClose();
+            ZIMapCommand.Close cmd = new ZIMapCommand.Close(Factory);
             if(cmd == null) return false;
 
             cmd.Queue();
@@ -691,7 +779,7 @@ namespace ZIMap
         public uint MailDelete(uint firstIndex, uint lastIndex, bool expunge)
         {   if(lastIndex < firstIndex) return 0;
 
-            ZIMapCommand.Store store = factory.CreateStore();
+            ZIMapCommand.Store store = new ZIMapCommand.Store(factory);
             ZIMapCommand disp = store;
             if(store == null)     return 0;
             store.UidCommand = enableUid;
@@ -699,7 +787,7 @@ namespace ZIMap
             bool bok = store.Queue(firstIndex, lastIndex, "+FLAGS (/Deleted)");
             uint count = 0;
             if(bok && expunge) 
-            {   ZIMapCommand.Expunge expu = factory.CreateExpunge();
+            {   ZIMapCommand.Expunge expu = new ZIMapCommand.Expunge(factory);
                 if(expu != null)
                 {   uint[] resu = expu.Expunged;
                     if(resu != null) count = (uint)resu.Length;
@@ -714,7 +802,7 @@ namespace ZIMap
         {   if(items == null)     return 0;
             if(items.Length <= 0) return 0;
 
-            ZIMapCommand.Store store = factory.CreateStore();
+            ZIMapCommand.Store store = new ZIMapCommand.Store(factory);
             ZIMapCommand disp = store;
             if(store == null)     return 0;
             store.UidCommand = enableUid;
@@ -722,7 +810,7 @@ namespace ZIMap
             bool bok = store.Queue(items, "+FLAGS (/Deleted)");
             uint count = 0;
             if(bok && expunge) 
-            {   ZIMapCommand.Expunge expu = factory.CreateExpunge();
+            {   ZIMapCommand.Expunge expu = new ZIMapCommand.Expunge(factory);
                 if(expu != null)
                 {   uint[] resu = expu.Expunged;
                     if(resu != null) count = (uint)resu.Length;
@@ -740,7 +828,7 @@ namespace ZIMap
         public MailInfo[] MailSearch(string what, string charset, string search,
                                      params string [] extra)
         {   if(factory == null) return null;
-            ZIMapCommand.Search cmd = factory.CreateSearch();
+            ZIMapCommand.Search cmd = new ZIMapCommand.Search(factory);
             if(cmd == null) return null;
             cmd.UidCommand = enableUid;
 
@@ -750,7 +838,7 @@ namespace ZIMap
             
             uint [] matches = cmd.Matches;
             if(matches == null)
-                MonitorError("MailSearch: command failed");
+                MonitorError("MailSearch: command failed: " + cmd.Data.Message);
             else if(matches.Length == 0)
                 MonitorInfo("MailSearch: nothing found");
             else
@@ -764,7 +852,7 @@ namespace ZIMap
         
         public uint[] MailSearch(string charset, string search, params string [] extra)
         {   if(factory == null) return null;
-            ZIMapCommand.Search cmd = factory.CreateSearch();
+            ZIMapCommand.Search cmd = new ZIMapCommand.Search(factory);
             if(cmd == null) return null;
             cmd.UidCommand = enableUid;
 
@@ -774,7 +862,7 @@ namespace ZIMap
             
             uint [] matches = cmd.Matches;
             if(matches == null)
-                MonitorError("MailSearch: command failed");
+                MonitorError("MailSearch: command failed: " + cmd.Data.Message);
             else if(matches.Length == 0)
                 MonitorInfo("MailSearch: nothing found");
             else
@@ -827,7 +915,7 @@ namespace ZIMap
                 mailboxFullName = mailboxName;
             if(mailboxFullName == null) return null;
 
-            ZIMapCommand.GetQuotaRoot gqr = factory.CreateGetQuotaRoot();
+            ZIMapCommand.GetQuotaRoot gqr = new ZIMapCommand.GetQuotaRoot(factory);
             if(gqr == null) return null;
             gqr.Queue(mailboxFullName);
             ZIMapCommand.GetQuotaRoot.Item[] quota = gqr.Quota;
@@ -870,7 +958,7 @@ namespace ZIMap
         /// A <see cref="System.Boolean"/>
         /// </returns>
         /// <remarks>
-        /// The <see cref="ZIMapServer.HasLimit/> is checked to see if an 
+        /// The <see cref="ZIMapServer.HasLimit"/> is checked to see if an 
         /// attempt to set a storage limit is ignored because the server does not
         /// support storage limits.  The same behaviour applies to message limits.
         /// In these cases no error status is returned.
@@ -883,7 +971,7 @@ namespace ZIMap
                 mailboxFullName = mailboxName;
             if(mailboxFullName == null) return false;
 
-            ZIMapCommand.GetQuotaRoot gqr = factory.CreateGetQuotaRoot();
+            ZIMapCommand.GetQuotaRoot gqr = new ZIMapCommand.GetQuotaRoot(factory);
             if(gqr == null) return false;
             if(!gqr.Queue(mailboxFullName))
             {   MonitorError("QuotaLimits: command failed: " + gqr.Data.Message);
@@ -895,7 +983,7 @@ namespace ZIMap
             if(!Server.HasLimit("storage")) storageLimit = 0;            
             if(!Server.HasLimit("message")) messageLimit = 0;            
             
-            ZIMapCommand.SetQuota cmd = factory.CreateSetQuota();
+            ZIMapCommand.SetQuota cmd = new ZIMapCommand.SetQuota(factory);
             StringBuilder sb = new StringBuilder();
             if(messageLimit > 0) sb.Append("MESSAGE " + messageLimit);
             if(storageLimit > 0)

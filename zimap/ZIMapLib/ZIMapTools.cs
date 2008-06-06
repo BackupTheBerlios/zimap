@@ -215,7 +215,7 @@ namespace ZIMap
         // usually of type ZIMapConnection
         private readonly ZIMapBase      parent;
         // log level for the instance
-        private          ZIMapMonitor   level = ZIMapMonitor.Info;
+        private          ZIMapMonitor   level = ZIMapMonitor.Error;
             
         /// <summary>
         /// This constructor is the only way to set the parent field.
@@ -412,13 +412,19 @@ namespace ZIMap
                 }
             }
             
+            /// <summary>Returns information on the token's type.</summary>
+            /// <remarks>Each token has a type that is stored in a 
+            /// seperate field.</remarks>
+            /// <value>A value from the <see cref="ZIMapParserData"/> enumeration.
+            /// </value>
             public ZIMapParserData Type 
             {   get { return type; } 
             }
             
             /// <summary>Directly accesses the token data.</summary>
-            /// <remarks> Never throws an exception.</remarks>
-            /// <value></value>
+            /// <remarks>Internally the token is stored as an object, the
+            /// other accessor properties cast to the specific type.</remarks>
+            /// <value>An object that represents the token.</value>
             public object Data 
             {   get { return data; } 
             }
@@ -426,7 +432,7 @@ namespace ZIMap
             /// <summary>Converts the token to an unsigned number.</summary>
             /// <remarks>May throw a conversion exception if the token type
             /// is not <c>Numeric</c></remarks>
-            /// <value>The numeric representation of the token</value>
+            /// <value>The numeric representation of the token.</value>
             public uint Number  
             {   get {   if(data is uint) return (uint)data; 
                         return uint.Parse(data.ToString()); 
@@ -435,25 +441,48 @@ namespace ZIMap
             
             /// <summary>Converts the token to text.</summary>
             /// <value>A simple string representation of the token</value>
-            /// <remarks> Never throws an exception. See alse <see cref="ToString()"/>
-            /// for an expensive but completed translation to text.</remarks>
+            /// <remarks> Never returns <c>null</c> and never throws an exception.  See also
+            /// <see cref="ToString()"/> for a more complete but alos more expensive
+            /// translation to text.</remarks>
             public string Text 
             {   get {   if(data == null) return "";
                         if(type != ZIMapParserData.List) 
                             return data.ToString();
                         StringBuilder sb = new StringBuilder();
                         foreach(Token t in (Token[])data)
-                        {   if(sb.Length > 1) sb.Append(' ');
+                        {   if(sb.Length > 1 && t.type != ZIMapParserData.Bracketed)
+                                sb.Append(' ');
                             sb.Append(t.ToString());
                         }
                         return sb.ToString();
                     }
             }
             
-            public Token[] List 
-            {   get {   return (Token[])data; } 
+            /// <summary>Returns the text of a quoted string or <c>null</c></summary>
+            /// <value>The unquoted string</value>
+            /// <remarks> This property returns <c>null</c> if the token is not
+            /// of type <see cref="ZIMapParserData.Quoted"/>.  This can be used
+            /// to distinguisch <c>NIL</c> values from quoted text.</remarks>
+            public string QuotedText
+            {   get {   if(data == null || type != ZIMapParserData.Quoted)
+                            return null;
+                        return (string)data;
+                    }
             }
             
+            /// <summary>Returns a token array for a List token</summary>
+            /// <value>The array or <c>null</c> if the token is not a List</value>
+            public Token[] List 
+            {   get {   if(type != ZIMapParserData.List) return null; 
+                        return (Token[])data; 
+                    } 
+            }
+            
+            /// <summary>String representation of the token</summary>
+            /// <value>The string</value>
+            /// <remarks>This function 'unparses' a token.  It restores braces and
+            /// quotes.  This is more expensive than calling the Text property.
+            /// </remarks>
             public override string ToString()
             {   if(data == null) return "";
                 if(type == ZIMapParserData.List)
@@ -610,9 +639,14 @@ namespace ZIMap
         public ZIMapParser.Token this[int index] 
         {   get {   return tokens[index];  }
         }
+
+        /// <summary>Returns the array of Tokens.</summary>
+        public ZIMapParser.Token[] ToArray()
+        {   return tokens.ToArray();
+        }
         
         /// <summary>Formatted debug output</summary>
-        public override string ToString ()
+        public override string ToString()
         {   StringBuilder sb = new StringBuilder();
             Dump(sb, 0, tokens.ToArray());
             return sb.ToString();
@@ -634,196 +668,6 @@ namespace ZIMap
                     Dump(sb, level+1, tok.List);
                 }
             }
-        }
-    }
-    
-        
-    //==========================================================================
-    // ZIMapRfc822 class    
-    //==========================================================================
-
-    public class ZIMapRfc822
-    {
-        List<string>    headerVal;
-        List<string>    headerKey;
-        List<string>    bodyLines;
-        uint            posSubject, posDate, posFrom, posTo;
-        
-        public string From
-        {   get {   if(posFrom == uint.MaxValue) return "";
-                    return headerVal[(int)posFrom];
-                }
-        }
-        
-        public string To
-        {   get {   if(posTo == uint.MaxValue) return "";
-                    return headerVal[(int)posTo];
-                }
-        }
-        
-        public string DateIMap
-        {   get {   if(posDate == uint.MaxValue) return "";
-                    return headerVal[(int)posDate];
-                }
-        }
-        
-        public DateTime DateBinary
-        {   get {   return ZIMapRfc822.DecodeTime(DateIMap, false);
-                }
-        }
-
-        public string DateISO
-        {   get {   DateTime dt = DateBinary;
-                    if(dt == DateTime.MinValue) return "";
-                    return dt.ToString("yyyy/MM/dd HH:mm:ss");
-                }
-        }
-        
-        public string Subject
-        {   get {   if(posSubject == uint.MaxValue) return "";
-                    return headerVal[(int)posSubject];
-                }
-        }
-        
-        public string[] BodyLines
-        {   get {   if(bodyLines == null) return null;
-                    return bodyLines.ToArray();  
-                }
-        }
-        
-        public string[] FieldNames
-        {   get {   if(headerKey == null) return null;   
-                    return headerKey.ToArray(); 
-                }
-        }
-
-        public string FieldValue(int index)
-        {   if(headerKey == null) return null;
-            if(index < 0 || index >= headerVal.Count) return null;
-            return headerVal[index];
-        }
-        
-        public bool SearchKey(ref int index, string key)
-        {   if(string.IsNullOrEmpty(key)) return false;
-            if(index < 0 || index >= headerVal.Count) return false;
-            key = key.ToLower();
-            do {
-                if(headerKey[index] == key) return true;
-                index++;
-            } while(index < headerVal.Count);
-            return false;
-        }
-        
-        public void Reset()
-        {   headerKey = null;
-            headerVal = null;
-            bodyLines = null;
-            posSubject =  posDate = posFrom = posTo = uint.MaxValue;
-        }
-        
-        private bool AddHeader(string key, string val)
-        {   if(string.IsNullOrEmpty(key) || val == null) return false;
-            bool convert = true;
-            key = key.ToLower();
-            string sint = string.IsInterned(key);
-            if(sint != null) key = sint;
-            
-            switch(key)
-            {   case "date":    posDate = (uint)headerKey.Count; 
-                                convert = false; break;
-                case "from":    posFrom = (uint)headerKey.Count; break;
-                case "to":      posTo   = (uint)headerKey.Count; break;
-                case "subject": posSubject = (uint)headerKey.Count; break;
-                default:        convert = false; break;
-            }
-            if(convert)
-                val = ZIMapConverter.DecodeRfc2047Text(val);
-            headerKey.Add(key);
-            headerVal.Add(val);
-            return true;
-        }
-        
-        public bool Parse(byte[] data)
-        {   Reset();                                // re-init
-            if(data == null) return false;
-            
-            System.IO.Stream strm = new System.IO.MemoryStream(data);
-            System.IO.StreamReader sr = new System.IO.StreamReader(strm, 
-                                                Encoding.ASCII);
-            string              line;
-            StringBuilder       sb = new StringBuilder();
-            string              key = null;
-            headerKey = new List<string>();
-            headerVal = new List<string>();
-            
-            // parse header:
-            while((line = sr.ReadLine()) != null)
-            {   line = line.TrimEnd(null);
-                if(line.Length > 0 && line[0] <= ' ')   // multi-line field
-                {   sb.AppendLine();
-                    sb.Append(line.Substring(1));
-                    continue;
-                }
-                if(key != null)
-                {   AddHeader(key, sb.ToString());
-                    key = null;
-                }
-                if(line == "") break;                   // end of header
-                
-                sb.Length = 0;                          // start new field
-                string[] flds = line.Split(":".ToCharArray(), 2);
-                key = flds[0];
-                if(flds.Length > 1 && flds[1].Length > 0) sb.Append(flds[1]);
-            }
-            
-            // missing empty line after header?
-            if(key != null) AddHeader(key, sb.ToString());
-
-            // did we get a header?
-            if(headerKey.Count < 1)
-            {   headerKey = null;
-                headerVal = null;
-                return false;
-            }
-            
-            // parse body:
-            while((line = sr.ReadLine()) != null)
-            {   if(bodyLines == null) bodyLines = new List<string>();
-                bodyLines.Add(line);
-            }
-            sr.Close();
-            return true;
-        }
-            
-        // =====================================================================
-        // Static methods for Time conversion
-        // =====================================================================
-        /* Testing DateTime conversions ...
-         *  
-        DateTime loc = DateTime.Now;            
-        DateTime utc = DateTime.UtcNow;
-        Console.WriteLine(ZIMapRfc822.EncodeTime(loc, false) + " " + loc.Kind + " " + loc.Hour);
-        Console.WriteLine(ZIMapRfc822.EncodeTime(utc, true) + " " + utc.Kind + " " + utc.Hour);
-        loc = ZIMapRfc822.DecodeTime("Sun, 18 May 2008 11:20:06 +0200", false);
-        utc = ZIMapRfc822.DecodeTime("Sun, 18 May 2008 11:20:06 +0200", true);
-        Console.WriteLine(ZIMapRfc822.EncodeTime(loc, false) + " " + loc.Kind + " " + loc.Hour);
-        Console.WriteLine(ZIMapRfc822.EncodeTime(utc, true) + " " + utc.Kind + " " + utc.Hour);
-        */
-        
-        public static DateTime DecodeTime(string rfc822time, bool toUTC)
-        {   DateTime res;
-            if(!DateTime.TryParse(rfc822time, out res))
-                return DateTime.MinValue;
-            return toUTC ? res.ToUniversalTime() : res;
-        }
-        
-        public static string EncodeTime(DateTime time, bool fromUTC)
-        {   if(fromUTC) time = time.ToLocalTime();
-            string ts = time.ToString("ddd, d MMM yyyy hh:mm:ss zzz",
-                System.Globalization.CultureInfo.InvariantCulture.DateTimeFormat);
-            int col = ts.LastIndexOf(':');
-            if(col > 0) ts = ts.Remove(col, 1);
-            return ts;
         }
     }
 }

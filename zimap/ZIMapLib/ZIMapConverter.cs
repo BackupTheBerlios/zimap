@@ -79,7 +79,7 @@ namespace ZIMap
         /// Text to convert
         /// </param>
         /// <param name="allow8bit">
-        /// Allow control chars (<0x20) and 8-bit chars (>0xfe)
+        /// Allow control chars (&lt;0x20) and 8-bit chars (&gt;0xfe)
         /// </param>
         /// <returns>
         /// <c>true</c> on success. If an invalid chars were detected <c>false</c> is

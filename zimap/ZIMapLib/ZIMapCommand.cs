@@ -24,7 +24,7 @@ namespace ZIMap
     /// </summary>
     /// <remarks>
     /// This class is public but abstract. You may for example use 
-    /// <see cref="ZIMapFactory.CreateGeneric()"/> to instantiate a concrete
+    /// <see cref="ZIMap.ZIMapFactory.CreateGeneric"/> to instantiate a concrete
     /// command object. Commands are associated with a <see cref="ZIMapFactory"/>
     /// (until <see cref="Dispose()"/> is called).  The factory is reponsible
     /// for command execution.
@@ -668,8 +668,9 @@ namespace ZIMap
         /// parsing server responses.  
         /// </summary>
         /// <remarks>
-        /// This class is inteded as a base class for more specific IMap Command
-        /// classes. It should be rarely instanciated directly.
+        /// This class is designed as a base class for more specific IMap Command
+        /// classes.  It should be rarely be used directly, for most IMap Commands
+        /// exist specialized classes that are derived from Generic.
         /// </remarks>
         public class Generic : ZIMapCommand
         {

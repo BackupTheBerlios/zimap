@@ -5,16 +5,17 @@
 #region Copyright 2008 Dr. Jürgen Pfennig  --  GNU General Public License
 // This software is published under the GNU GPL license.  Please refer to the
 // file COPYING for details. Please use the following e-mail address to contact
-// me or to send bug-reports:  info at j-pfennig dot de .  
+// me or to send bug-reports:  info at j-pfennig dot de .
 #endregion
 
 using System;
+using System.Threading;
 using System.Collections.Generic;
 using ZTool;
 
 namespace ZIMap
 {
-    
+
     /// <summary>
     /// Testing
     /// </summary>
@@ -25,12 +26,12 @@ namespace ZIMap
         // =============================================================================
         // Program call options
         // =============================================================================
-        
+
         // -debug: generate debug output
         private static bool     Debug;
         // -ascii: do not use line drawing chars
         private static bool     Ascii;
-        // --: explicit end of options 
+        // --: explicit end of options
         private static bool     EndOption;
         // -server: name of IMAP server
         private static string   Server;
@@ -50,24 +51,22 @@ namespace ZIMap
         private static string   Log;
         // extra arguments
         private static string[] Commands;
-        
+
         // =============================================================================
-        // Execution State        
+        // Execution State
         // =============================================================================
 
         // IMap layer
         private static ZIMapApplication App;
-        // Data access and Cache        
+        // Data access and Cache
         private static CacheData    Cache;
         // set true by calls to Error()
         private static bool         ErrorCalled;
         // unparsed command string
         private static string       UnparsedCommand;
-        // selected list prefix (from user command)
-        public  static string       ListPrefix;
 
         // =============================================================================
-        // Console and Debug support        
+        // Console and Debug support
         // =============================================================================
 
         public static void Error(string message)
@@ -81,25 +80,25 @@ namespace ZIMap
         }
 
         public static void Message(string message)
-        {   if(Output >= OutLevel.Brief)   
+        {   if(Output >= OutLevel.Brief)
                 WriteOutput("    ", message);
         }
 
         public static void Message(string message, params object[] arguments)
-        {   if(Output >= OutLevel.Brief)   
+        {   if(Output >= OutLevel.Brief)
                 WriteOutput("    ", string.Format(message, arguments));
         }
 
         public static void Info(string message)
-        {   if(Output >= OutLevel.Info)   
+        {   if(Output >= OutLevel.Info)
                 WriteOutput("    ", message);
         }
 
         public static void Info(string message, params object[] arguments)
-        {   if(Output >= OutLevel.Info)   
+        {   if(Output >= OutLevel.Info)
                 WriteOutput("    ", string.Format(message, arguments));
         }
-        
+
         public static bool Confirm(string prompt)
         {   bool result = LineTool.Confirm("*** " + prompt);
             if(result) return true;
@@ -111,12 +110,32 @@ namespace ZIMap
         {   return Confirm(string.Format(message, arguments));
         }
 
+        public static void WriteIndented(uint extra, string prefix, string text)
+        {
+            TextTool.GetDefaultFormatter();
+            uint umax = TextTool.TextWidth;
+            if(umax > 100) umax = 100;                      // limit output width
+
+            int indent = -3;
+            if(prefix != null) indent = prefix.Length;
+            if(indent > 0) text = prefix + text;
+
+            if((extra & 1) != 0) TextTool.Formatter.WriteLine("");
+            TextTool.PrintIndent(indent, umax, TextTool.Decoration.None, text);
+            if((extra & 2) != 0) TextTool.Formatter.WriteLine("");
+        }
+
         public static void WriteOutput(string prefix, string message)
-        {   if(!Ascii && prefix != "    ")
+        {   if(message == null)
+            {   Console.WriteLine();
+                return;
+            }
+            if(prefix == null) prefix = "    ";
+            if(!Ascii && prefix != "    ")
             {   if     (prefix == "*** ") Console.ForegroundColor = ConsoleColor.Red;
                 else if(prefix == "**  ") Console.ForegroundColor = ConsoleColor.Blue;
                 else                      Console.ForegroundColor = ConsoleColor.Green;
-                
+
                 Console.Write(prefix);
                 Console.ResetColor();
                 Console.WriteLine(message);
@@ -125,44 +144,30 @@ namespace ZIMap
                 Console.WriteLine("{0}{1}", prefix, message);
             // TODO: WriteOutput write to Log
         }
-        
+
         // =============================================================================
-        // TextTool Callback Interface        
+        // TextTool Callback Interface
         // =============================================================================
 
-        public class TabFormatterA : TextTool.DefaultFormatter
-        {   public override void WriteLine(string line)
-            {   Console.WriteLine("    " + line);
-            }
-        }
-
-        public class TabFormatterU : TextTool.IFormatter
-        {
-            public char   GetLine1()               {   return '─';     }
-            public char   GetLine2()               {   return '═';     }
-            public string GetCross1()              {   return "─┼─";   }
-            public string GetCross2()              {   return "─┴─";   }
-            public string GetIndexSeparator()      {   return " │ ";   }
-            public string GetColumnSeparator()     {   return "  ";    }
-            public void WriteLine(string line)     {   Console.WriteLine("    " + line);    }
-        }
-        
         public static TextTool.TableBuilder GetTableBuilder(uint columns)
-        {   TextTool.TableBuilder tb = new ZTool.TextTool.TableBuilder(columns);
-            if(Ascii)
-                tb.Formatter = new ZIMapAdmin.TabFormatterA();
+        {   TextTool.UseAscii = Ascii;
+            TextTool.AutoWidth = true;
+            TextTool.Prefix = "    ";
+            TextTool.TableBuilder tb = null;
+            if(columns == 0)
+                TextTool.GetDefaultFormatter();
             else
-                tb.Formatter = new ZIMapAdmin.TabFormatterU();
+                tb = new TextTool.TableBuilder(columns);
             return tb;
         }
-        
+
         // =============================================================================
-        // ZIMapLib Callback Interface        
+        // ZIMapLib Callback Interface
         // =============================================================================
 
         class IMapCallback : ZIMapConnection.ICallback
         {   public bool Monitor(ZIMapConnection connection, ZIMapMonitor level, string message)
-            {   if(message == null) return true;   
+            {   if(message == null) return true;
                 string prefix = null;
                 if      (level == ZIMapMonitor.Debug)    prefix = "*   ";
                 else if (level == ZIMapMonitor.Info)     prefix = "**  ";
@@ -176,7 +181,7 @@ namespace ZIMap
                     if(idx >= 0) message = message.Substring(idx+1);
                     uint num;
                     if(!uint.TryParse(message, out num)) return true;
-                    
+
                     System.Text.StringBuilder bar = new System.Text.StringBuilder(30);
                     if(num >= 100)
                     {   bar.Append(' ', 18 + 25);
@@ -205,7 +210,7 @@ namespace ZIMap
                     }
                     ZIMapAdmin.WriteOutput(prefix, message);
                 }
-                return true;   
+                return true;
             }
             public bool Closed(ZIMapConnection connection)
             {   //Console.WriteLine("CLOSED");
@@ -221,16 +226,27 @@ namespace ZIMap
                 //    Console.WriteLine("RESULT: " + info.GetType().Name);
                 return true;   }
             public bool Error(ZIMapConnection connection, ZIMapException error)
-            {   ZIMapAdmin.Error("Error [exception]: {0}", error.Message);
+            {   if(Thread.CurrentThread.ThreadState == ThreadState.AbortRequested)
+                    return true;
+                ZIMapAdmin.Error("Error [exception]: {0}", error.Message);
+
+                // HACK: Process.Kill() is ugly on Mono, use Abort instead.
+// TODO: try Environment.Exit()
+                // When Abort is caught in Catch() MS will pop-up a Debug dialog,
+                // Mono does not (currently?) ...
+#if MONO_BUILD
                 System.Threading.Thread.CurrentThread.Abort();
-                return false;   
+#else
+                System.Diagnostics.Process.GetCurrentProcess().Kill();
+#endif
+                return false;
             }
         }
 
         // =============================================================================
-        // Command execution        
+        // Command execution
         // =============================================================================
-        
+
         /// <summary>
         /// A simple overload for <see cref="Execute(string, string[], string[])"/>
         /// </summary>
@@ -261,7 +277,7 @@ namespace ZIMap
                         opts.Add(token.Text.Substring(1));
                 }
             }
-            
+
             ErrorCalled = false;
             bool bok = Execute(cmd, opts.ToArray(), args.ToArray());
             UnparsedCommand = null;
@@ -269,7 +285,7 @@ namespace ZIMap
             if(!ErrorCalled) Error("Command failed: {0}", cmd);
             return false;
         }
-        
+
         /// <summary>
         /// Execute preparsed commands.
         /// </summary>
@@ -308,13 +324,13 @@ namespace ZIMap
                 return false;
             }
             cmd = commands[offset];
-            
+
             // now check the options ...
             string oset = commands[offset+1];               // option definitions
             if(string.IsNullOrEmpty(oset)) opts = null;     // no options allowed
             else if(opts == null)                           // no option present
-                opts = ZIMapConverter.StringArray(0); 
-            
+                opts = ZIMapConverter.StringArray(0);
+
             if(opts != null && opts.Length > 0)
             {   string[] list = commands[offset+1].Split(" ".ToCharArray());
                 for(int iopt=0; iopt < opts.Length; iopt++)
@@ -335,15 +351,15 @@ namespace ZIMap
                     opts[iopt] = list[iidx];
                 }
             }
-            
+
             // finally check arguments ...
             string aset = commands[offset+2];               // argument definitions
             if(string.IsNullOrEmpty(aset)) args = null;     // no arguments allowed
             else if(args == null)                           // no arguments present
-                args = ZIMapConverter.StringArray(0); 
+                args = ZIMapConverter.StringArray(0);
             bool singleArg = false;                         // only one arg allowed
             bool multiArgs = false;
-            
+
             string[] alis = null;
             if(!string.IsNullOrEmpty(aset))                 // have arg definition?
             {   multiArgs = aset.Contains("...");
@@ -351,7 +367,7 @@ namespace ZIMap
                 if(alis.Length == 1 && !multiArgs)          // single arg command
                     singleArg = true;
             }
-            
+
             if(args != null && args.Length > 0)             // validate arg count...
             {   if(string.IsNullOrEmpty(aset))
                 {   Error("No non-option arguments permitted");
@@ -363,13 +379,13 @@ namespace ZIMap
                     return false;
                 }
             }
-            
+
             // special case 'help' ...
             if(cmd == "help")
             {   Command(opts, args.Length > 0 ? args[0] : null);
                 return true;
             }
-            
+
             // execute ...
             string exec = "Execute" + cmd[0].ToString().ToUpper() + cmd.Substring(1);
             if(Debug)
@@ -377,22 +393,20 @@ namespace ZIMap
 
             try {
                 object[] arga = null;
-                // Console.WriteLine("{0} {1} {2}", singleArg, opts == null, args == null);
-                
+
                 if(singleArg)
                 {   string arg = (args == null || args.Length < 1) ? "" : args[0];
                     if(opts != null)                 arga = new object[] { opts, arg };
                     else                             arga = new object[] { arg };
                 }
                 else
-                {   if(opts != null && args != null) arga = new object[] { opts, args }; 
-                    else if(opts != null)            arga = new object[] { opts }; 
+                {   if(opts != null && args != null) arga = new object[] { opts, args };
+                    else if(opts != null)            arga = new object[] { opts };
                     else if(args != null)            arga = new object[] { args };
                 }
 
-                object stat = typeof(ZIMapAdmin).InvokeMember(exec, 
-                                     System.Reflection.BindingFlags.Static |
-                                     System.Reflection.BindingFlags.InvokeMethod, 
+                object stat = typeof(ZIMapAdmin).InvokeMember(exec,
+                                     System.Reflection.BindingFlags.InvokeMethod,
                                      null, null, arga);
                 return (bool)stat;
             }
@@ -401,7 +415,9 @@ namespace ZIMap
                 return false;
             }
             catch(Exception ex)
-            {   Error("Command caused exception: " + ex.Message);
+            {   if(Thread.CurrentThread.ThreadState == ThreadState.AbortRequested)
+                    return false;
+                Error("Command caused exception: " + ex.Message);
                 if(ex.InnerException != null)
                 {   Error("-       inner  exception: " + ex.InnerException.Message);
                     if(Debug) Console.WriteLine(ex.InnerException.StackTrace);
@@ -417,39 +433,47 @@ namespace ZIMap
         }
 
         // =============================================================================
-        // Usage, Options and Commands        
+        // Usage, Options and Commands
         // =============================================================================
-        
+
         /// <summary>
         /// Output a usage message.
         /// </summary>
         public static void Usage()
-        {   string usage = "Usage:   " + ArgsTool.AppName + "  ";
-            string extra = "         " + ArgsTool.AppName + "  ";
-            string space = " ".PadRight(usage.Length);
-            Console.WriteLine(usage + "{0} {1} {2} {6}\n" +                 // server, protocol, timeout
-                              space + "{3} {4} {5} {10}\n" +                 // account passwd mailbox
-                              space + "{7} {8} {9} [commands...]\n" +   // ascii confirm debug
-                              extra + "[{11} | {12}]",                   // help, commands
-                              ArgsTool.Param(options, "server",  false),
-                              ArgsTool.Param(options, "protocol", true),
-                              ArgsTool.Param(options, "timeout",  true),
-                              ArgsTool.Param(options, "account", false),
-                              ArgsTool.Param(options, "password", true),
-                              ArgsTool.Param(options, "mailbox",  true),
-                              ArgsTool.Param(options, "ascii",    true),
-                              ArgsTool.Param(options, "confirm",  true),
-                              ArgsTool.Param(options, "output",   true),
-                              ArgsTool.Param(options, "log",      true),
-                              ArgsTool.Param(options, "debug",    true),
-                              ArgsTool.Param(options, "help",    false),
-                              ArgsTool.Param(options, "command", false));
-            Console.WriteLine("\n{0}\n\n{1}", ArgsTool.List(options, "Options: "),
-              "The program enters an interactive mode if no commands (non-option arguments) are\n" +
-              "given.  Multiple commands can be used, execution stops after the 1st failure. It\n" +
-              "is recommended to enclose commands in single quotes like: 'create \"My Folder\"'.\n\n" +
-              "The characters '-' and ':' are used to indicate an option and a value.  Alterna-\n" +
-              "tively '/' and '=' are accepted.  So '/timeout=20' is also a legal option\n"); 
+        {   string usage = "Usage:   " + ArgsTool.AppName + " ";
+            string extra = "         " + ArgsTool.AppName + " ";
+            WriteIndented(0, usage, string.Join(" ", new string[] {
+                          ArgsTool.Param(options, "server",  false),
+                          ArgsTool.Param(options, "protocol", true),
+                          ArgsTool.Param(options, "timeout",  true), "\n",
+                          ArgsTool.Param(options, "account", false),
+                          ArgsTool.Param(options, "password", true),
+                          ArgsTool.Param(options, "mailbox",  true), "\n",
+                          ArgsTool.Param(options, "confirm",  true),
+                          ArgsTool.Param(options, "output",   true),
+                          ArgsTool.Param(options, "log",      true), "\n",
+                          ArgsTool.Param(options, "ascii",    true),
+                          ArgsTool.Param(options, "debug",    true), "[argument...]" } ));
+            WriteIndented(2, extra, string.Join(" ", new string[] {
+                          ArgsTool.Param(options, "help",    false),
+                          ArgsTool.Param(options, "command", false) } ));
+
+            TextTool.Formatter.WriteLine(ArgsTool.List(options, "Options: "));
+
+            WriteIndented(3, null,
+              "The program enters an interactive mode if no commands (non-option arguments) are " +
+              "specified.  Otherwise multiple commands can be given and the execution stops after " +
+              "the 1st failure.");
+            WriteIndented(2, null,
+              "It is recommended to enclose commands in single quotes.  Example: " +
+              "'create \"My Folder\"'.  An alternative command syntax exists - just prepend each " +
+              "command with '--'.  Example: ' -- delete scratch -- create \"something new\" -- list'." +
+              "  The two forms cannot be mixed.  Please note that parameters for IMAP may still need " +
+              "quoting if they contain spaces.");
+            WriteIndented(2, null,
+              "The characters '-' and ':' are used to denote options and values.  Alternatively " +
+              "'/' and '=' are accepted.  So '/timeout=20' is also recognized as on option.  Option " +
+              "values can be split into sub-values using commas.  Example: '-protocol:imap,tls'.");
         }
 
         /// <summary>
@@ -467,21 +491,27 @@ namespace ZIMap
             if(!(bAll || bList))
                 cmdh = string.IsNullOrEmpty(argc) ? "help" : argc;
             if(cmdh == null)
-                Console.WriteLine(ArgsTool.AppName + " implements the following commands:\n");
-            
+                WriteOutput(null, ArgsTool.AppName + " implements the following commands:\n");
+
+            // configure output ...
+            string preGroup = Ascii ? "=== " : "► ";
+            string sufGroup = Ascii ? " ===" : " ◄";
+            string preText  = Ascii ? "* " : "■ ";
+
+            // loop over commands ...
             for(int irun=0; irun+3 < commands.Length; irun+=4)
             {   if(string.IsNullOrEmpty(commands[irun]))
                 {   if(cmdh != null) continue;
                     if(!Ascii) Console.ForegroundColor = System.ConsoleColor.Red;
-                    Console.WriteLine("    * {0}", commands[irun+3]);
+                    WriteOutput(null, preGroup + commands[irun+3] + sufGroup);
                     if(!Ascii) Console.ResetColor();
-                    if(!bList) Console.WriteLine();
+                    if(!bList) WriteOutput(null, null);
                     continue;
-                }   
+                }
 
                 // help for one command - skip others ...
                 if(cmdh != null && !commands[irun].StartsWith(cmdh)) continue;
-                
+
                 // print options ...
                 System.Text.StringBuilder args = new System.Text.StringBuilder();
                 string[] opts = commands[irun+1].Split(" ".ToCharArray());
@@ -492,24 +522,16 @@ namespace ZIMap
                     args.Append("[-");
                     args.Append(opt);
                     args.Append("] ");
-                    if(args.Length > 50)
-                    {   Console.WriteLine("    {0} {1}", pref.PadRight(9), args);
-                        pref = " "; args.Length = 0;
-                    }
                 }
-                Console.WriteLine("    {0} {1}{2}", 
-                                  pref.PadRight(9), args, commands[irun+2]);
+                WriteIndented(0, pref.PadRight(10), args + commands[irun+2]);
                 if(!Ascii) Console.ResetColor();
-                
+
                 // print details ...
-                if(!bList)
-                {   string text = commands[irun+3].Replace("\n", "\n    ");
-                    Console.WriteLine("\n    - {0}\n", text);
-                }
+                if(!bList) WriteIndented(3, preText, commands[irun+3]);
             }
-            if(bList) Console.WriteLine();
+            if(bList) WriteOutput(null, null);
         }
-        
+
         private static string[] options = {
             "server",   "host",     "Connect to a server at {host}",
             "protocol", "name",     "Use the protocol {name}             (default: imap)",
@@ -528,95 +550,102 @@ namespace ZIMap
             "help",     "",         "Print this text and quit",
             "command",  "",         "Print the list of commands and quit",
         };
-        
+
         private static string[] commands = {
-            "", "", "", "Commands to examine or to modify mailboxes ...",
-            
+            "", "", "", "Commands to examine or to modify mailboxes",
+
             "list",     "all counts subscription rights quota", "{filter}",
-                        "Lists mailboxes.  The filter can be a full mailbox name or may\n" +
-                        "contain '%' to match inside one hierarchy level or '*' to match\n" +
+                        "Lists mailboxes.  The filter can be a full mailbox name or may " +
+                        "contain '%' to match inside one hierarchy level or '*' to match " +
                         "anything.  The default option is -detailed.",
-            "open",     "read write", "[{mailbox}]", 
-                        "Opens a mailbox.  Default option is -read (for read-only access).\n" +
-                        "The mailbox name is given as unicode string.  The name can ba a sub-\n" +
-                        "string and is matched against a list of mailboxes fetched from the\n" +
+            "open",     "read write", "[{mailbox}]",
+                        "Opens a mailbox.  Default option is -read (for read-only access). " +
+                        "The mailbox name is given as unicode string.  The name can ba a substring " +
+                        "and is matched against a list of mailboxes fetched from the " +
                         "server.",
             "subscribe","add remove", "[{filter}|{mailbox}...]",
-                        "List, add (option -add) or remove (option -remove) subscriptions.\n" +
+                        "List, add (option -add) or remove (option -remove) subscriptions. " +
                         "Giving no option behaves like 'list -subscrition {filter}'.",
-            
+
             "create",   "", "{mailbox}...",
-                        "Create a new (child-)mailbox.  A user may create multiple children\n" +
-                        "in his INBOX folder (although the server may list them as sibblings).",
+                        "Create a new (child-)mailbox.  A user may create multiple children " +
+                        "in his INBOX folder (although the server may list them as sibblings). ",
             "delete",   "", "{mailbox}...",
-                        "Delete a (child-)mailbox.  Continues without an error if the mailbox\n" +
+                        "Delete a (child-)mailbox.  Continues without an error if the mailbox " +
                         "did not exist.  Some servers may refuse to delete non-empty mailboxes.",
             "rename",   "", "{mailbox} {newname}",
                         "Rename a mailbox.",
 
-            "", "", "", "Commands for an open mailbox ...",
+            "", "", "", "Commands for an open mailbox",
 
             "show",     "brief to from subject date size flags uid id", "[{mailbox}]",
-                        "If a mailbox argument is given this mailbox is made current.  Then the\n" +
-                        "mails in the current mailbox are listed.  The -brief option implies -to,\n" +
+                        "If a mailbox argument is given this mailbox is made current.  Then the " +
+                        "mails in the current mailbox are listed.  The -brief option implies -to, " +
                         "-from and -subject.  Brief is the default if no other options is given.",
-            "sort",     "revert to from subject date size flags uid id", "",      
+            "sort",     "revert to from subject date size flags uid id", "",
                         "Sorts the mails of the current mailbox, -revert reverses the direction.",
             "set",      "id uid deleted seen flagged custom", "[{flag}...] {item}...|*",
-                        "Set built-in or custom flags for mail items in the current mailbox.\n" +
-                        "The -custom option enable the use of {flag} arguments (which cannot be\n" +
-                        "numeric).  A list of item numbers or * select the affected mails.  The\n" +
+                        "Set built-in or custom flags for mail items in the current mailbox. " +
+                        "The -custom option enable the use of {flag} arguments (which cannot be " +
+                        "numeric).  A list of item numbers or * select the affected mails.  The " +
                         "item numbers can also be ids or uids (with -id or -uid option).",
             "unset",    "id uid deleted seen flagged custom", "[{flag}...] {item}...|*",
-                        "Like the 'set' command but clears the flags.\n",
+                        "Like the 'set' command but clears the flags. ",
             "expunge",  "", "",
-                        "Remove mails flagged as deleted from the current mailbox",
+                        "Remove mails flagged as deleted from the current mailbox.  This will " +
+                        "also happens automatically when the mailbox is explicitly closed or " +
+                        "if another mailbox is opened.",
             "copy",     "id uid", "{mailbox} {item}...|*",
-                        "Copy mails to another mailbox.  The mailbox name is followed by a list\n" +
+                        "Copy mails to another mailbox.  The mailbox name is followed by a list " +
                         "of item numbers (or *), mail ids (option -id) or uids (option -uid).",
             "close",    "", "",
-                        "Close any open mailbox.  The IMap server implicitly deletes all\n" +
+                        "Close any open mailbox.  The IMap server implicitly deletes all " +
                         "mails in the mailbox that have the \\Deleted flag set.",
-                   
-            "", "", "", "Administrative commands ...",
-            
+
+            "", "", "", "Administrative commands",
+
             "user",     "list add remove quota", "[{user}] [{storage} [{messages}]]",
-                        "List users, create or remove a user root mailbox, set user quotas or\n" +
+                        "List users, create or remove a user root mailbox, set user quotas or " +
                         "(without option) make a user the default user.",
             "shared",   "list add remove quota", "[{name}] [{storage} [{messages}]]",
                         "List shared root mailboxes, create or remove a shared root mailbox.",
             "quota",    "mbyte", "{mailbox} [{storage} {messages}]]",
-                        "Change the quota settings of a mailbox.  Default unit for storage is\n" +
-                        "kByte (use -byte or -mbyte to override).  Use a value of 0 to clear a\n" +
+                        "Change the quota settings of a mailbox.  Default unit for storage is " +
+                        "kByte (use -byte or -mbyte to override).  Use a value of 0 to clear a " +
                         "quota setting.  Without storage argument the current quota are shown.",
             "rights",   "all read write none custom deny", "{mailbox} [{rights} [{user}...]]",
-                        "Change the rights for a mailbox.  The flags -all -read -write -none\n" +
-                        "and -custom are exclusive.  By default rights are granted, the -deny\n" +
-                        "flag  adds 'negative' rights.  When -custom is give a list of custom\n" +
+                        "Change the rights for a mailbox.  The flags -all -read -write -none " +
+                        "and -custom are exclusive.  By default rights are granted, the -deny " +
+                        "flag  adds 'negative' rights.  When -custom is give a list of custom " +
                         "rights must follow the mailbox name.",
 
-            "", "", "", "Miscellaneous commands ...",
-            
-            "search",   "header body both query", "[{query}] values...",
-                        "Search the mailbox",
-            "imap",     "verbatim", "command args...",
-                        "Execute an IMap command.  By default the command arguments get parsed and\n" +
-                        "reassembled, use -verbatim to run an unparsed command.",
-            "info",     "mailbox server application", "[{mailbox}|{item}]",
-                        "Output information about a mailitem (default), a mailbox, the server or\n" +
+            "", "", "", "Miscellaneous commands",
+
+            "search",   "header body or query", "[{query}] values...",
+                        "Search the current mailbox for messages.  If neither -header nor -body are " +
+                        "header and body are searched.  The default for a simple query is to match " +
+                        "messages that contain all given values (and).  This can be changed to match " +
+                        "messages that contain any of the give values using -or.  With -query you can " +
+                        "specify more complex queries with ? characters as placeholders for values.",
+            "imap",     "verbatim", "command [{argument}|?|#]...",
+                        "Execute an IMap command.  By default the command arguments get parsed and " +
+                        "reassembled, use -verbatim to run an unparsed command.  You can use ? chars " +
+                        "as placeholders for literal data and # chars as placeholders for mailbox names.",
+            "info",     "mailbox server application id uid headers body", "[{mailbox}|{item}]",
+                        "Output information about a mailitem (default), a mailbox, the server or " +
                         "the application.  For a mailitem the item number is required.",
-            "export",   "append override", "{file} {id|uid} ...",
-                        "Export mails to a mbox file.  The -override option will cause existing\n" +
-                        "files to be overridden without a warning, -append will add data to an ex-\n" +
-                        "isting file or create a new file as required.  There is no default option.",
-            "import",   "", "{file}",
+            "export",   "list recurse id uid", "{file|path} [{mailbox}] [{id|uid}...]",
+                        "Export mails to a mbox file.  The -override option will cause existing " +
+                        "files to be overridden without a warning, -append will add data to an " +
+                        "existing file or create a new file as required.  There is no default option.",
+            "import",   "list", "{file|path} [{mailbox}]",
                         "Import mails from a mbox file into the current mailbox.",
             "cache",    "clear on off", "",
-                        "Enable or disable caching of IMap data (-on and -off) or clear\n" +
+                        "Enable or disable caching of IMap data (-on and -off) or clear " +
                         "the current cache content.  The default option is -on.",
             "help",     "all list", "[{command}]",
-                        "Prints the list of commands (-list) or information about a single\n" +
-                        "command (with the {command} argument). A detailed list containing\n" +
+                        "Prints the list of commands (-list) or information about a single " +
+                        "command (with the {command} argument). A detailed list containing " +
                         "containing all commands is printed with -all."
         };
 
@@ -640,15 +669,53 @@ namespace ZIMap
                 if(opt == option) return true;
             return false;
         }
-        
+
+        /// <summary>
+        /// Check for a conflict between exclusive options
+        /// </summary>
+        /// <param name="opts">
+        /// The options that were passed to the calling function
+        /// </param>
+        /// <param name="names">
+        /// A list of exclusive options.
+        /// </param>
+        /// <returns>
+        /// The number of matches (0 := none of options in 'names' found,
+        /// 1 := ok, >1 conflict.
+        /// </returns>
+        /// <remarks>
+        /// In the case of a conflict an error messages is sent to output.
+        /// </remarks>
+        public static uint ExclusiveOption(string[] opts, params string[] names)
+        {   if(opts == null || opts.Length < 1) return 0;
+            if(names == null || names.Length < 1) return 0;
+            uint ucnt = 0;
+            string first = null;
+            foreach(string opt in names)
+            {   if(!HasOption(opts, opt)) continue;
+                if(ucnt == 0) first = opt;
+                if(ucnt > 0) Error("Option '-{0}' conflicts with '-{1}'", first, opt);
+                ucnt++;
+            }
+            return ucnt;
+        }
+
         // =============================================================================
-        // Main        
+        // Main
         // =============================================================================
         public static void Main(string[] args)
         {   uint confirm = 0;
-
-            // --- step 1: parse command line arguments            
-            
+            ZIMapConnection.TlsModeEnum tlsmode = ZIMapConnection.TlsModeEnum.Automatic;
+/*
+            foreach(string a in args)
+            {   ZIMapExport.CreateMailboxFile(".", a);
+            }
+          //  ZIMapExport.ParseFolder(".");
+ZIMapExport.MailFile[] mf = ZIMapExport.ParseFolder(".", false);
+ZIMapExport.DumpMailFiles(mf);
+            return;
+  */          
+            // --- step 1: parse command line arguments
             ArgsTool.Option[] opts = ArgsTool.Parse(options, args, out Commands);
             if(opts == null)
             {   Console.WriteLine("Invalid command line. Try /help to get usage info.");
@@ -664,12 +731,14 @@ namespace ZIMap
                     return;
                 }
                 switch(o.Name)
-                {   case "?":   
+                {   case "?":
                     case "help":    Usage();
                                     return;
-                    case "command": Execute("help -all " + o.Value);
+                    case "command": GetTableBuilder(0);         // init TextTool
+                                    Execute("help -all " + o.Value);
                                     return;
                     case "ascii":   Ascii = true;
+                                    TextTool.UseAscii = true;
                                     break;
                     case "confirm": if     (o.Value == "on")  confirm = 1;
                                     else if(o.Value == "off") confirm = 2;
@@ -692,6 +761,12 @@ namespace ZIMap
                                     break;
                     case "protocol":
                                     Protocol = o.Value;
+                                    if(o.SubValues != null)
+                                    {   if(o.SubValues[0] == "tls"  )
+                                            tlsmode = ZIMapConnection.TlsModeEnum.Required;
+                                        if(o.SubValues[0] == "notls")
+                                            tlsmode = ZIMapConnection.TlsModeEnum.Disabled;
+                                    }
                                     break;
                     case "timeout":
                                     if(!uint.TryParse(o.Value, out Timeout))
@@ -711,8 +786,9 @@ namespace ZIMap
                 }
             }
             opts = null;                                    // memory can be freed
+            GetTableBuilder(0);                             // init TextTool
 
-            // --- step 2: prompt for missing parameters            
+            // --- step 2: prompt for missing parameters
 
             bool batch;
             if(Commands != null && Commands.Length > 0)
@@ -723,7 +799,6 @@ namespace ZIMap
                 string missing = null;
                 if     (Server  == null)  missing = "server";
                 else if(Account == null)  missing = "account";
-                else if(Password == null) missing = "password";
                 if(missing != null)
                 {   Error("Please add a '-{0}' option to your command line", missing);
                     return;
@@ -733,7 +808,7 @@ namespace ZIMap
             {   if(confirm == 2) LineTool.AutoConfirm = true;
                 if(Output == OutLevel.Undefined) Output = OutLevel.All;
                 batch = false;
-                
+
                 if(Server == null)
                 {   Server = LineTool.Prompt("Server  ");
                     if(string.IsNullOrEmpty(Server)) return;
@@ -742,19 +817,24 @@ namespace ZIMap
                 {   Account = LineTool.Prompt("Account ");
                     if(string.IsNullOrEmpty(Account)) return;
                 }
-                if(Password == null)
-                {   Password = LineTool.Prompt("Password");
-                    if(string.IsNullOrEmpty(Password)) return;
-                }
             }
 
-            // --- step 3: Connect and configure            
-            
-            Message(string.Format("Connecting {0}:{1} ...", Protocol, Server));
+            if(Password == null)
+                Password = System.Environment.GetEnvironmentVariable("ZIMAP_PWD");
+            if(string.IsNullOrEmpty(Password))
+            {   Password = LineTool.Prompt("Password");
+                if(string.IsNullOrEmpty(Password)) return;
+            }
+
+            // --- step 3: Connect and configure
+
+            uint port = ZIMapConnection.GetIMapPort(Protocol);
+            if(port == ZIMapConnection.GetIMapPort()) Protocol = "imap";
+            if(!batch)
+                Message(string.Format("Connecting {0}://{1}@{2} ...", Protocol, Account, Server));
             ZIMapConnection.Callback = new IMapCallback();
-            
-            App = new ZIMapApplication(Server, Protocol);
-            App.EnableUidCommands = true;
+
+            App = new ZIMapApplication(Server, port);
             App.EnableProgressReporting = true;
             Cache = new CacheData(App);
 
@@ -762,33 +842,38 @@ namespace ZIMap
             if(Debug) App.MonitorLevel = ZIMapMonitor.Debug;
             if(Debug) App.SetMonitorLevel(ZIMapMonitor.Debug, true);
 
-            if(!App.Connect(Account, Password))
+            if(!App.Connect(Account, Password, tlsmode))
             {   Error("Failed to connect");
                 return;
             }
-            
+
             if(Output >= OutLevel.Info)
-            {   Info("Server: " + App.Connection.ProtocolLayer.ServerGreeting);
-                Info("Server: The Hierarchy Delimiter is: " + App.Factory.HierarchyDelimiter);
-            }
-            
+                Info("Server: " + App.Connection.ProtocolLayer.ServerGreeting);
             if(!App.Factory.HasCapability("IMAP4rev1"))
                 Error("WARNING: This is not an IMAP4rev1 server!");
-                
-            // --- step 4: Open mailbox, Execute Commands            
-            
+
+            // --- step 4: Open mailbox, Execute Commands
+
             if(MailBoxName == null || Execute("open -write " + MailBoxName))
             {
                 // has commands from command line...
                 if(batch)
-                {   if(EndOption)
-                    {   string   carg = string.Join(" ", Commands);
-                        Commands = carg.Split(new string[] { "--" }, StringSplitOptions.RemoveEmptyEntries);
+                {   // If the "--" syntax is used ...
+                    if(EndOption)
+                    {   // Arguments that contain spaces must be quoted
+                        for(uint urun=0; urun < Commands.Length; urun++)
+                            if(Commands[urun].Contains(" "))
+                                ZIMapConverter.QuotedString(out Commands[urun], Commands[urun], true);
+                        // build command string and split by "--" into single commands
+                        string   carg = string.Join(" ", Commands);
+                        Commands = carg.Split(new string[] { "-- " }, StringSplitOptions.RemoveEmptyEntries);
                     }
+
+                    // Execute the array of commands until failure ...
                     foreach(string cmd in Commands)
                         if(!Execute(cmd)) break;
                 }
-                
+
                 // prompt for commands...
                 else
                 {   Message("Entering command loop. Type 'help -list' to see the list of commands...");
@@ -800,8 +885,8 @@ namespace ZIMap
                 }
             }
 
-            // --- step 5: Disconnect and exit            
-            
+            // --- step 5: Disconnect and exit
+
             App.Disconnect();
             return;
         }

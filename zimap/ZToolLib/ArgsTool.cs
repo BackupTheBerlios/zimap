@@ -42,6 +42,7 @@ namespace ZTool
         {
             public string       Name;
             public string       Value;
+            public string[]     SubValues;
             public uint         Index;  // index in options[] 
             public OptionStatus Error;  // 0 := ok, -1 := undefined, -2 := ambiguous
         }
@@ -97,6 +98,9 @@ namespace ZTool
             return sb.ToString();            
         }
         
+        /// <summary>
+        /// Format option help like  [-myoption:{value}]
+        /// </summary>
         public static string Param(string[] options, string name, bool optional)
         {   
             StringBuilder sb = new StringBuilder();
@@ -145,6 +149,15 @@ namespace ZTool
                     if(sepi > 0)
                     {   o.Name = varg.Substring(0, sepi);
                         o.Value = varg.Substring(sepi+1);
+                        
+                        // do we have subvalues?
+                        int isub = o.Value.IndexOf(",");
+                        if(isub >= 0)
+                        {   string subs = o.Value.Substring(isub+1);
+                            o.Value = o.Value.Substring(0, isub);
+                            if(!string.IsNullOrEmpty(subs))
+                                o.SubValues = subs.Split(",".ToCharArray()); 
+                        }
                     }
                     else
                         o.Name = varg;
