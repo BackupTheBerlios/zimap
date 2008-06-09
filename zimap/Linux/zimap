@@ -1,0 +1,555 @@
+#!/bin/bash
+# ------------------------------------------------------------------------------
+# Copyright Dr. J. Pfennig (c) 2007-2008
+#
+# Script Template
+# ------------------------------------------------------------------------------
+CEN_NAME=${0##*/}  # script name
+CEN_VERB=1         # verbosity, -v and -q
+CEN_EXIT=0         # exit code
+CEN_DONE=          # no action, -n
+CEN_ACTION=        # action argument
+CEN_OPT_YESNO=     # see -Y and -N options
+CEN_SERVER=        # see action "server"
+CEN_PROGRAM=
+CEN_SHELL=
+
+# CONFIG Files:
+CEN_THIS=$(readlink -f $0 2>/dev/null)
+CEN_CONFIG="${CEN_THIS}.conf"
+CEN_CONFIG_DIR="/etc/${CEN_NAME}/"
+CEN_CONFIG_ETC="$CEN_CONFIG_DIR${CEN_NAME}.conf"
+
+# ------------------------------------------------------------------------------
+# print usage info
+# ------------------------------------------------------------------------------
+usage() {
+    cat << !EOF
+usage: $CEN_NAME [options...] [server <name>] action [arguments...]
+
+       *** options:
+
+       -h --help            show this text
+       -q --quiet           be silent
+       -v --verbose         be verbose
+       -n --nothing         do nothing
+       -N --no              do not prompt for input, assume 'no'
+       -Y --yes             do not prompt for input, assume 'yes'
+
+       *** administrative actions:
+
+       admin [run|shell] [-- <cmd>]...
+                            execute as administrator
+       add <account>...     add IMAP user account(s)
+       remove <account>...  remove IMAP user account(s) with backup
+       purge <account>...   remove IMAP user account(s) wihtout backup
+
+       backup <account>...  create a back for acount(s)
+       restore <mboxfile> <account>
+                            restore a backup from a file to a mailbox
+       *** user actions:
+
+       credentials [<server> [<account>]]
+                            create a (default) credentials file
+       run [<mailbox>|- [<account>|-]] [-- <cmd>]...
+                            execute as user, optionally open a the given
+                            <mailbox> and for an optional <account>.
+       shell [<account>]    run an IMAP shell as user
+
+       Examples:    $CEN_NAME user INBOX -- show   # list INBOX content
+                    $CEN_NAME user - internet      # login as 'internet'
+                    $CEN_NAME server home admin    # open admin on 'home'
+
+!EOF
+    exit 1
+}
+
+# ------------------------------------------------------------------------------
+# input/output helpers
+# ------------------------------------------------------------------------------
+fatal() {
+    echo "$CEN_NAME: ***FATAL ERROR*** $*" 1>&2 ; exit 2 ; }
+error() {
+    echo "$CEN_NAME: ***ERROR*** $*" 1>&2
+    [ "$CEN_EXIT" -le 1 ] && CEN_EXIT=2 ; }
+message() {
+    [ "$CEN_VERB" -gt 0 ] && echo "$CEN_NAME: $*" 1>&2 ; }
+trace() {
+    [ "$CEN_VERB" -gt 1 ] && echo "$CEN_NAME: $*" 1>&2 ; }
+confirm() {
+    [ "$CEN_OPT_YESNO" = "y" ] && return 0
+    [ "$CEN_OPT_YESNO" = "n" ] && return 1
+    local yn ; read -p "$1 [y/n]? " yn 1>&2
+    [ "$yn" = "y" -o "$yn" = "yes" ] && return 0 ; return 1 ; }
+
+# ------------------------------------------------------------------------------
+# argument checker      Args: current min [max|-]
+# ------------------------------------------------------------------------------
+arguments() {
+    local message ; message="takes $2 arguments, got $1"
+    if [ -z "$3" ] ; then
+       [ "$1" = "$2" ] && return 0
+       [ "$2" = 0 ] && message="no arguments permitted, got $1"
+       [ "$2" = 1 ] && message="takes one argument, got $1"
+    elif [ "$1" -lt "$2" ] ; then
+        message="not enough arguments, (minimum $2) got $1"
+    elif [ "$3" = "-" ] ; then
+       return 0
+    elif [ "$1" -gt "$3" ] ; then
+        message="too many arguments, (maximum $3) got $1"
+    else
+        return 0
+    fi
+    error "Action '$CEN_ACTION' $message" ; return 1
+}
+
+# ------------------------------------------------------------------------------
+# Get the defaults: defaults [program]
+# ------------------------------------------------------------------------------
+
+PORT=
+SERVER=
+USETLS=
+ACCOUNT=
+PASSWORD=
+ADMIN=
+BACKUPFOLDER=
+
+defaults()
+{
+    # get the defaults
+    [ -r "$ZIMAP_DEFAULT" ] && . "$ZIMAP_DEFAULT"
+    [ -r "$HOME$ZIMAP_USER_DEFAULT" ] && . "$$HOME$ZIMAP_USER_DEFAULT"
+    [ -n "$CEN_SERVER" ] && SERVER="$CEN_SERVER"
+
+    # get the app path
+    if [ -z "ZIMAP_APP_PATH" -o ! -d "$ZIMAP_APP_PATH" ] ; then
+        trace "No valid app path configured: $ZIMAP_APP_PATH"
+        local xexe="$(readlink -f $0)"
+        local xpat="${xexe%/*}"
+        [ "$xpat" = "." -o -z "$xpat" ] && xpat="$PWD"
+        trace "Using app path: $xpat"
+        ZIMAP_APP_PATH="$xpat"
+    fi
+
+    [ "$USETLS" = "auto" ] && USETLS=""
+    [ -z "$ACCOUNT" ] && PASSWORD=""
+
+    [ -z "$RUNTIME" ] && RUNTIME="$ZIMAP_RUNTIME"
+    local xrun="$(type -p $RUNTIME)"
+    [ -z "$xrun" ] && xrun="$(type -p $xpat/$RUNTIME)"
+    [ -z "$xrun" ] && fatal "Runtime not found (need to install mono?): $RUNTIME"
+    RUNTIME="$xrun"
+    [ -x "$RUNTIME" ] || fatal "Runtime not executable: $RUNTIME"
+
+    local prog="$ZIMAP_APP_ADMIN"
+    [ -n "$CEN_SHELL" ] && prog="$ZIMAP_APP_SHELL"
+    CEN_PROGRAM="$ZIMAP_APP_PATH/${1:-$prog}"
+    [ -r "$CEN_PROGRAM" ] || fatal "Program not executable: $CEN_PROGRAM"
+}
+
+# ------------------------------------------------------------------------------
+# Get credentials: credentials {server} {account}
+# ------------------------------------------------------------------------------
+credentials()
+{   local cnam="${1:-$SERVER}_${2:-$ACCOUNT}$ZIMAP_CRED_EXT"
+    local cbas="$HOME/$ZIMAP_USER_DIR/"
+    local cfil="$cbas$cnam"
+    if [ ! -r "$cfil" ] ; then
+        trace "No credentials: $cfil"
+        cfil="$CEN_CONFIG_DIR$cnam"
+        if [ ! -r "$cfil" ] ; then
+           trace "No credentials: $cfil"
+           return 1
+        fi
+    fi
+
+    trace "Read credentials: $cfil"
+    while : ; do
+        read -r ACCOUNT
+        read -r PASSWORD
+        break
+    done < $cfil
+    return 0
+}
+
+# ------------------------------------------------------------------------------
+# Parse get up to 2 arguments and check for extra args
+# ------------------------------------------------------------------------------
+
+ARG1=
+ARG2=
+EXTRA=
+
+parse()
+{
+    [ -z "$1" ] && return 0
+    if [ "$1" != "--" ] ; then
+        ARG1="$1" ; shift
+    fi
+
+    [ -z "$1" ] && return 0
+    if [ "$1" != "--" ] ; then
+        ARG2="$1" ; shift
+    fi
+
+    [ -z "$1" ] && return 0
+    if [ "$1" != "--" ] ; then
+        error "Invalid extra arguments: $*"
+        return 1
+    fi
+    shift
+    arglist "$@"
+}
+
+# ------------------------------------------------------------------------------
+# Create a list of arguments (following --) in $EXTRA
+# ------------------------------------------------------------------------------
+arglist()
+{
+    sepa=$'\t'
+    while [ -n "$1" ] ; do
+        if [ -n "$EXTRA" ] ; then
+            EXTRA="$EXTRA$sepa$1"
+        else
+            EXTRA="$1"
+        fi
+        shift
+    done
+}
+
+# ------------------------------------------------------------------------------
+# Complete the server name, check if TRUSTED (no tls)
+# ------------------------------------------------------------------------------
+servercheck()
+{
+    local serv
+    [[ $SERVER != *.* ]] &&
+        for serv in $SERVERS ; do
+            [[ $serv != $SERVER.* ]] && [[ $serv != *.$SERVER.* ]] && continue
+            message "Full name of '$SERVER' is '$serv'"
+            SERVER="$serv" ; break
+        done
+
+    [ "$USETLS" = "notls" ] ||
+        for serv in $TRUSTED ; do
+            [ "$serv" = "$SERVER" ] || continue
+            message "Trusted server, not using TLS"
+            USETLS=notls ; break
+        done
+}
+
+# ------------------------------------------------------------------------------
+# Runit  <mailbox> <user>
+# ------------------------------------------------------------------------------
+runit()
+{
+    # check server, 1st for full name, 2nd if we need TLS
+    servercheck
+
+    # get user/password from config file
+
+    [ -n "$2" ] && ACCOUNT="$2"
+    credentials "" "${2:-$USER}" || credentials
+    export ZIMAP_PWD="$PASSWORD"
+
+    # assemble options
+
+    sepa=$'\t'
+    opts="-server:$SERVER"
+    if [ "$CEN_VERB" = 2 ] ; then
+        opts="$opts$sepa-debug"
+    elif [ "CEN_VERB" = 1 ] ; then
+        [ -n "$ZIMAP_RUNTIME_DEBUG" ] && opts="$opts$sepa-debug"
+    fi
+    [ -n "$1" ] && opts="$opts$sepa-mailbox:$1"
+    [ -n "$ACCOUNT" ] && opts="$opts$sepa-account:$ACCOUNT"
+    if [ "$USETLS" = "imaps" ] ; then
+        opts="$opts$sepa-protocol:imaps"
+    elif [ -n "$USETLS" ] ; then
+        opts="$opts$sepa-protocol:$PORT,$USETLS"
+    fi
+
+    # call the zimap program
+
+    IFS="$sepa"
+    if [ -z "$EXTRA" ] ; then
+       exec $ZIMAP_RUNTIME $ZIMAP_RUNTIME_DEBUG $CEN_PROGRAM $opts
+    else
+       exec $ZIMAP_RUNTIME $ZIMAP_RUNTIME_DEBUG $CEN_PROGRAM $opts -- $EXTRA
+    fi
+    IFS=
+}
+
+# ------------------------------------------------------------------------------
+# Command: server <name>
+# ------------------------------------------------------------------------------
+actionServer()
+{
+    if [ -z "$1" -o "$1" = "--" ] ; then
+        error "Missing server name"
+        return
+    fi
+    CEN_SERVER="$1"
+}
+
+# ------------------------------------------------------------------------------
+# Command: admin [-- ...]
+# ------------------------------------------------------------------------------
+actionAdmin()
+{
+    case "$1" in
+        she*)   if [ "$#" -gt 0 ] ; then
+                    error "No extra args for 'shell' allowed"
+                    return
+                fi
+                CEN_SHELL="y" ; shift ;;
+        run)    shift ;;
+    esac
+    parse "$@" || return
+    if [ -n "$ARG1" ] ; then
+        error "Invalid argument: $ARG1"
+        return
+    fi
+    defaults
+    PASSWORD=
+    runit "" "$ADMIN"
+}
+
+# ------------------------------------------------------------------------------
+# Command: add account...
+# ------------------------------------------------------------------------------
+actionAdd()
+{
+    arguments $# 1 - || return
+    defaults
+    arglist user -add "$@"
+    runit "" "$ADMIN"
+}
+
+# ------------------------------------------------------------------------------
+# Command: remove account...
+# ------------------------------------------------------------------------------
+actionRemove()
+{
+    arguments $# 1 - || return
+    defaults
+
+    [ -w "$BACKUPFOLDER" ] || fatal "Backup folder not writable: $BACKUPFOLDER"
+    message "The folder for backups is: $BACKUPFOLDER"
+    confirm "Do you really want to remove users" || return
+
+    while [ -n "$1" ] ; do
+        [ -n "$EXTRA" ] && arglist --
+        arglist save "$BACKUPFOLDER" "$1" --
+        arglist user -remove "$1"
+        shift
+    done
+    runit "" "$ADMIN"
+}
+
+# ------------------------------------------------------------------------------
+# Command: purge account...
+# ------------------------------------------------------------------------------
+actionPurge()
+{
+    arguments $# 1 - || return
+    defaults
+    confirm "Do you really want to remove users without backup" || return
+    arglist user -remove "$@"
+    runit "" "$ADMIN"
+}
+
+# ------------------------------------------------------------------------------
+# Command: restore mboxfile account
+# ------------------------------------------------------------------------------
+actionResto()
+{
+    arguments $# 2 || return
+    defaults
+    [ -r "$1" ] || fatal "Mailbox file no readable: $1"
+    message "Restore messages from '$1' to account '$2'"
+    confirm "Do you really want to restore messages" || return
+    arglist restore "$1" "$2"
+    runit "" "$ADMIN"
+}
+
+# ------------------------------------------------------------------------------
+# Command: shell [account]
+# ------------------------------------------------------------------------------
+actionShell()
+{
+    arguments $# 0 1 || return
+    CEN_SHELL="y"
+    defaults
+    if [ "$1" = "--" ] ; then
+        error "Cannot use -- with 'shell'"
+        return
+    fi
+    runit "" "$1"
+}
+
+# ------------------------------------------------------------------------------
+# Command: user [mailbox [account]] [-- ...]
+# ------------------------------------------------------------------------------
+actionUser()
+{
+    parse "$@" || return
+    defaults
+    [ "$ARG1" = "-" ] && ARG1=""
+    [ "$ARG2" = "-" ] && ARG2=""
+    runit "$ARG1" "$ARG2"
+}
+
+# ------------------------------------------------------------------------------
+# Command: credentials [server [account]]
+# ------------------------------------------------------------------------------
+actionCreds()
+{
+    arguments $# 0 2 || return
+    defaults
+    cd ~ || fatal "No home directory"
+    [ -d "$ZIMAP_USER_DIR" ] || mkdir "$ZIMAP_USER_DIR"
+
+    [ -n "$1" -a "$1" != "-" ] && SERVER="$1"
+    servercheck
+    [ -n "$2" ] && ACCOUNT="$2"
+    credentials
+    local serv acnt pass tab
+    tab=$'\t'
+    [ -z "$1" ] && read -p "Server   [$SERVER]$tab> " serv
+    [ -z "$2" ] && read -p "Account  [$ACCOUNT]$tab> " acnt
+    read -p "Password [$PASSWORD]$tab> " pass
+    if [ -n "$serv" ] ; then
+        SERVER="$serv"
+        servercheck
+    fi
+    [ -n "$acnt" ] && ACCOUNT="$acnt"
+    [ -z "$pass" ] && pass="$PASSWORD"
+
+    cat > "$ZIMAP_USER_DIR/${SERVER}_${ACCOUNT}$ZIMAP_CRED_EXT" <<!EOF || fatal "Failed to write"
+$ACCOUNT
+$pass
+!EOF
+    chmod 600 "$ZIMAP_USER_DIR/${SERVER}_${ACCOUNT}$ZIMAP_CRED_EXT" || fatal "Failed to chmod"
+    trace "Created: $ZIMAP_USER_DIR/${SERVER}_${ACCOUNT}$ZIMAP_CRED_EXT"
+    confirm "Use this as default" || return 0
+    cd "$ZIMAP_USER_DIR" || fatal "No config directory"
+    ln -s -f "${SERVER}_${ACCOUNT}$ZIMAP_CRED_EXT" "${SERVER}_$USER$ZIMAP_CRED_EXT"
+    trace "Default: ${SERVER}_$USER$ZIMAP_CRED_EXT"
+}
+
+# ------------------------------------------------------------------------------
+# Command: samba  verb [arg]...
+# ------------------------------------------------------------------------------
+actionSamba()
+{
+cat <<!EOF
+
+# $CEN_NAME can act as a samba script proxy and will then transparently create and
+# delete mail folders as samba users are created, delete or change group.  Add
+# the following lines to smb.conf in [global] and edit $ZIMAP_DEFAULT
+
+    add machine script            = $CEN_THIS addmachine          '%u'
+    add user script               = $CEN_THIS adduser             '%u'
+    add group script              = $CEN_THIS addgroup            '%g'
+    add user to group script      = $CEN_THIS addusertogroup      '%u' '%g'
+    delete user script            = $CEN_THIS deleteuser          '%u'
+    delete group script           = $CEN_THIS deletegroup         '%g'
+    delete user from group script = $CEN_THIS deleteuserfromgroup '%u' '%g'
+    set primary group script      = $CEN_THIS setprimarygroup     '%u' '%g'
+    rename user script            = $CEN_THIS renameuser          '%uold' '%unew'
+
+!EOF
+}
+
+# ------------------------------------------------------------------------------
+# Main part: dispatch action arguments
+# ------------------------------------------------------------------------------
+
+[ "$#" = 0 ] && usage
+while [ -n "$*" ] ; do
+    CEN_ACTION="$1" ; shift
+    case "$CEN_ACTION" in
+    -h|--help)
+        usage ;;
+    -q|--quiet)
+        CEN_VERB=0 ;;
+    -v|--verb*)
+        CEN_VERB=2 ;;
+    -n|--nothing)
+        CEN_DONE=2 ;;
+    -N|--no)
+        CEN_OPT_YESNO="n" ;;
+    -Y|--yes)
+        CEN_OPT_YESNO="y" ;;
+    --)
+        break ;;
+    -*)
+        error "Unknown option '$CEN_ACTION', try '$CEN_NAME --help'." ;;
+    *)
+        break ;;
+    esac
+    CEN_ACTION="-"
+done
+
+# load configuration, 1st try: script location, 2nd try: /etc/zimap
+
+if [ -n "$CEN_ACTION" -a "$CEN_EXIT" = 0 ] ; then
+    if [ ! -r "$CEN_CONFIG" ] ; then
+        trace "No config file: $CEN_CONFIG"
+        CEN_CONFIG="$CEN_CONFIG_ETC"
+        [ -r "$CEN_CONFIG" ] || fatal "No config file: $CEN_CONFIG"
+    fi
+
+    # set actual config dir, resolve symlink and load config
+    CEN_CONFIG_DIR="${CEN_CONFIG%/*}/"
+    [ -L "$CEN_CONFIG_DIR" ] && CEN_CONFIG_DIR="$(readlink -f $CEN_CONFIG_DIR)"
+    trace "Loading config: $CEN_CONFIG"
+    export ZTOOL_COLOR ZTOOL_READLINE ZTOOL_RESIZE
+    . "$CEN_CONFIG"
+
+    # warning if actual and configured dirs do not match
+    [ "$ZIMAP_CONFIG_FOLDER" != "$CEN_CONFIG_DIR" ] &&
+        message "WARNING: Alternate configuration folder: $CEN_CONFIG_DIR"
+fi
+
+# excute actions
+
+while [ -n "$CEN_ACTION" -a "$CEN_EXIT" = 0 ] ; do
+    case "$CEN_ACTION" in
+    adm*)   CEN_ACTION="admin"
+            [ -z "$CEN_DONE" ] && actionAdmin  "$@" ; break ;;
+    add)    [ -z "$CEN_DONE" ] && actionAdd    "$@" ; break ;;
+    cre*)   CEN_ACTION="credentials"
+            [ -z "$CEN_DONE" ] && actionCreds  "$@" ; break ;;
+    rem*)   CEN_ACTION="remove"
+            [ -z "$CEN_DONE" ] && actionRemove "$@" ; break ;;
+    pur*)   CEN_ACTION="purge"
+            [ -z "$CEN_DONE" ] && actionPurge  "$@" ; break ;;
+    bac*)   CEN_ACTION="backup"
+            [ -z "$CEN_DONE" ] && actionBackup "$@" ; break ;;
+    res*)   CEN_ACTION="restore"
+            [ -z "$CEN_DONE" ] && actionResto  "$@" ; break ;;
+    run)    [ -z "$CEN_DONE" ] && actionUser   "$@" ; break ;;
+    she*)   CEN_ACTION="shell"
+            [ -z "$CEN_DONE" ] && actionShell  "$@" ; break ;;
+    --)     CEN_ACTION="run"
+            [ -z "$CEN_DONE" ] && actionUser -- "$@" ; break ;;
+    ser*)   CEN_ACTION="server"
+            [ -z "$CEN_DONE" ] && actionServer "$1" ; shift
+            if [ -z "$1" ] ; then
+                CEN_ACTION="run" ; continue
+            fi ;;
+    sam*)   CEN_ACTION="samba"
+            [ -z "$CEN_DONE" ] && actionSamba "$@"  ; break ;;
+    -)
+        error "Don't know what to do, try '$CEN_NAME --help'." ;;
+    *)
+        error "Unknown action '$CEN_ACTION', try '$CEN_NAME --help'." ;;
+    esac
+    CEN_ACTION="$1" ; shift
+done
+
+trace "Exit status: $CEN_EXIT"
+exit $CEN_EXIT

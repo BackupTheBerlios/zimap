@@ -1,0 +1,34 @@
+# -----------------------------------------------------------------
+# zimap - Site config file, gets sourced by zimap, shell is bash
+# -----------------------------------------------------------------
+
+# server nane (default is localhost)
+##SERVER=alpha
+
+# port name or number (default is 'imap' or 'imaps'):
+##PORT=
+
+# possible values: imaps, notls, tls, auto(default)
+##USETLS=imaps
+##USETLS=notls
+
+# account name (default is USERNAME)
+##ACCOUNT=guest
+
+# password default - only used if ACCOUNT has a value
+##PASSWORD=guest
+
+# administrator account (default is cyrus)
+##ADMIN=administrator
+
+# used for backups created by remove (default ~/.zimap/Backup):
+##BACKUPFOLDER=/var/imap/backups
+
+# full hostnames for server name completion. If a server argument
+# does not contain a '.' this list is searched (like "[.]$arg.*"):
+##SERVERS="imap.1und1.de alpha.centauri.home alpha1.centauri.home"
+
+# servers that need no TLS encryption (full domain names):
+##TRUSTED="localhost alpha.centauri.home alpha1.centauri.home"
+
+# end
