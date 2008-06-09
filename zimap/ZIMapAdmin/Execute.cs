@@ -960,11 +960,36 @@ namespace ZIMap
             if(!CheckIdAndUidUse(opts, out bID, out bUID)) return false;
             if(ExclusiveOption(opts, "list", "recurse") > 1) return false;
             if(ExclusiveOption(opts, "list", "id", "uid") > 1) return false;
+            
+            // TODO: args default is INBOX
+            // TODO: use account for inbox (friendly name see list)
+            
+            ZIMapExport expo = App.OpenExport(args[0], true, true);
+            if(expo == null) return false;
+            if(bList)
+            {   ZIMapExport.DumpMailFiles(expo.Existing);
+                return true;
+            }
+
+            // TODO: multiple args need -merge or a folder            
+            
+            for(int irun=1; irun < args.Length; irun++)
+            {   System.IO.Stream strm = expo.WriteMailbox(args[irun]);
+                if(strm == null) break;
+                strm.Close();
+                Message("Mailbox written: " + args[irun]);
+            }
             return false;
         }
 
         public static bool ExecuteImport(string[] opts, string[] args)
         {   bool bList = HasOption(opts, "list");
+            ZIMapExport expo = App.OpenImport(args[0], true);
+            if(expo == null) return false;
+            if(bList)
+            {   ZIMapExport.DumpMailFiles(expo.Existing);
+                return true;
+            }
             return false;
         }
     }

@@ -71,32 +71,32 @@ namespace ZIMap
 
         public static void Error(string message)
         {   ErrorCalled = true;
-            WriteOutput("*** ", message);
+            LineTool.Error(message);
         }
 
         public static void Error(string message, params object[] arguments)
         {   ErrorCalled = true;
-            WriteOutput("*** ", string.Format(message, arguments));
+            LineTool.Error(message, arguments);
         }
 
         public static void Message(string message)
         {   if(Output >= OutLevel.Brief)
-                WriteOutput("    ", message);
+                LineTool.Message(message);
         }
 
         public static void Message(string message, params object[] arguments)
         {   if(Output >= OutLevel.Brief)
-                WriteOutput("    ", string.Format(message, arguments));
+                LineTool.Message(message, arguments);
         }
 
         public static void Info(string message)
         {   if(Output >= OutLevel.Info)
-                WriteOutput("    ", message);
+                LineTool.Info(message);
         }
 
         public static void Info(string message, params object[] arguments)
         {   if(Output >= OutLevel.Info)
-                WriteOutput("    ", string.Format(message, arguments));
+                LineTool.Info(message, arguments);
         }
 
         public static bool Confirm(string prompt)
@@ -110,6 +110,10 @@ namespace ZIMap
         {   return Confirm(string.Format(message, arguments));
         }
 
+        public static void WriteIndented(uint extra, string prefix, params string[] args)
+        {   WriteIndented(extra, prefix, string.Join(" ", args));
+        }
+        
         public static void WriteIndented(uint extra, string prefix, string text)
         {
             TextTool.GetDefaultFormatter();
@@ -125,26 +129,6 @@ namespace ZIMap
             if((extra & 2) != 0) TextTool.Formatter.WriteLine("");
         }
 
-        public static void WriteOutput(string prefix, string message)
-        {   if(message == null)
-            {   Console.WriteLine();
-                return;
-            }
-            if(prefix == null) prefix = "    ";
-            if(!Ascii && prefix != "    ")
-            {   if     (prefix == "*** ") Console.ForegroundColor = ConsoleColor.Red;
-                else if(prefix == "**  ") Console.ForegroundColor = ConsoleColor.Blue;
-                else                      Console.ForegroundColor = ConsoleColor.Green;
-
-                Console.Write(prefix);
-                Console.ResetColor();
-                Console.WriteLine(message);
-            }
-            else
-                Console.WriteLine("{0}{1}", prefix, message);
-            // TODO: WriteOutput write to Log
-        }
-
         // =============================================================================
         // TextTool Callback Interface
         // =============================================================================
@@ -153,12 +137,9 @@ namespace ZIMap
         {   TextTool.UseAscii = Ascii;
             TextTool.AutoWidth = true;
             TextTool.Prefix = "    ";
-            TextTool.TableBuilder tb = null;
-            if(columns == 0)
-                TextTool.GetDefaultFormatter();
-            else
-                tb = new TextTool.TableBuilder(columns);
-            return tb;
+            TextTool.GetDefaultFormatter();
+            if(columns <= 0) return null;
+            return new TextTool.TableBuilder(columns);
         }
 
         // =============================================================================
@@ -166,79 +147,65 @@ namespace ZIMap
         // =============================================================================
 
         class IMapCallback : ZIMapConnection.ICallback
-        {   public bool Monitor(ZIMapConnection connection, ZIMapMonitor level, string message)
+        {   // Pretty formatting of monitor messages ...
+            public bool Monitor(ZIMapConnection connection, ZIMapMonitor level, string message)
             {   if(message == null) return true;
-                string prefix = null;
-                if      (level == ZIMapMonitor.Debug)    prefix = "*   ";
-                else if (level == ZIMapMonitor.Info)     prefix = "**  ";
-                else if (level == ZIMapMonitor.Error)    prefix = "*** ";
-                else if (level == ZIMapMonitor.Messages) return true;
-                if(prefix == null)
-                {   if(ZIMapAdmin.Output < OutLevel.All) return true;
-                    if(ZIMapAdmin.Debug) return true;
-                    int idx = message.LastIndexOf(' ');
-                    if(idx >= message.Length - 1) return true;
-                    if(idx >= 0) message = message.Substring(idx+1);
-                    uint num;
-                    if(!uint.TryParse(message, out num)) return true;
-
-                    System.Text.StringBuilder bar = new System.Text.StringBuilder(30);
-                    if(num >= 100)
-                    {   bar.Append(' ', 18 + 25);
-                        bar.Append('\r');
-                        Console.Write(bar.ToString());
-                        return true;
-                    }
-                    uint mrk = (num + 3) / 4;
-                    bar.Append('#', (int)mrk);
-                    if(mrk < 25) bar.Append(' ', (int)(25 - mrk));
-                    if(ZIMapAdmin.Ascii)
-                        Console.Write("    Working [{0}] {1,2}%\r", bar, num);  // 18 chars
-                    else
-                    {   Console.Write("    Working [");
-                        Console.ForegroundColor = ConsoleColor.Green;
-                        Console.Write(bar);
-                        Console.ResetColor();
-                        Console.Write("] {0,2}%\r", num);
-                    }
-                }
-                else
+                
+                // output messages ...
+                if(level <= ZIMapMonitor.Error)
                 {   int icol = message.IndexOf(' ');
                     if(icol >= 0 && icol+2 < message.Length && message[icol+1] == ':')
-                    {   message = message.Substring(icol+2);
-                        ZIMapAdmin.ErrorCalled = true;
-                    }
-                    ZIMapAdmin.WriteOutput(prefix, message);
+                        message = message.Substring(icol+2);
                 }
+                switch(level)
+                {   case ZIMapMonitor.Debug:    LineTool.Extra(message); return true;
+                    case ZIMapMonitor.Info:     LineTool.Info(message);  return true;
+                    case ZIMapMonitor.Error:    ZIMapAdmin.ErrorCalled = true;
+                                                LineTool.Error(message); return true;
+                    case ZIMapMonitor.Progress: break;
+                    default:                    return true;
+                }
+                
+                // output progress ...
+                if(ZIMapAdmin.Output < OutLevel.All) return true;
+                if(ZIMapAdmin.Debug) return true;
+                int idx = message.LastIndexOf(' ');
+                if(idx >= message.Length - 1) return true;
+                if(idx >= 0) message = message.Substring(idx+1);
+                uint num;
+                if(!uint.TryParse(message, out num)) return true;
+
+                System.Text.StringBuilder bar = new System.Text.StringBuilder();
+                if(num >= 100)                          // completed, fill with spaces
+                {   bar.Append(' ', 18 + 25);
+                    bar.Append('\r');
+                    LineTool.Write(LineTool.TextAttributes.Continue, bar.ToString());
+                    return true;
+                }
+                uint mrk = (num + 3) / 4;
+                bar.Append('#', (int)mrk);
+                if(mrk < 25) bar.Append(' ', (int)(25 - mrk));
+                LineTool.Write(LineTool.TextAttributes.Continue, "    Working [");
+                LineTool.Write(LineTool.TextAttributes.Continue + LineTool.Modes.Extra,
+                               bar.ToString());
+                LineTool.Write(LineTool.TextAttributes.Continue, "] {0,2}%\r", num);
                 return true;
             }
+
+            // don't care about these ...
             public bool Closed(ZIMapConnection connection)
-            {   //Console.WriteLine("CLOSED");
-                return true;   }
+            {   return true;   }
             public bool Request(ZIMapConnection connection, uint tag, string command)
-            {   //Console.WriteLine("REQUEST: " + tag + ": " + command);
-                return true;   }
+            {   return true;   }
             public bool Result(ZIMapConnection connection, object info)
-            {   //if(info is ZIMapReceiveData)
-                //    Console.WriteLine("RESULT: {0}: {1}: {2}", ((ZIMapReceiveData)info).Tag,
-                //      ((ZIMapReceiveData)info).ReceiveState, ((ZIMapReceiveData)info).Message);
-                //else
-                //    Console.WriteLine("RESULT: " + info.GetType().Name);
-                return true;   }
+            {   return true;   }
+            
+            // kill program on exception ...
             public bool Error(ZIMapConnection connection, ZIMapException error)
             {   if(Thread.CurrentThread.ThreadState == ThreadState.AbortRequested)
                     return true;
                 ZIMapAdmin.Error("Error [exception]: {0}", error.Message);
-
-                // HACK: Process.Kill() is ugly on Mono, use Abort instead.
-// TODO: try Environment.Exit()
-                // When Abort is caught in Catch() MS will pop-up a Debug dialog,
-                // Mono does not (currently?) ...
-#if MONO_BUILD
-                System.Threading.Thread.CurrentThread.Abort();
-#else
-                System.Diagnostics.Process.GetCurrentProcess().Kill();
-#endif
+                System.Environment.Exit(2);
                 return false;
             }
         }
@@ -420,10 +387,10 @@ namespace ZIMap
                 Error("Command caused exception: " + ex.Message);
                 if(ex.InnerException != null)
                 {   Error("-       inner  exception: " + ex.InnerException.Message);
-                    if(Debug) Console.WriteLine(ex.InnerException.StackTrace);
+                    if(Debug) LineTool.Write(ex.InnerException.StackTrace);
                 }
                 else if(Debug)
-                    Console.WriteLine(ex.StackTrace);
+                    LineTool.Write(ex.StackTrace);
                 return false;
             }
             finally
@@ -440,9 +407,7 @@ namespace ZIMap
         /// Output a usage message.
         /// </summary>
         public static void Usage()
-        {   string usage = "Usage:   " + ArgsTool.AppName + " ";
-            string extra = "         " + ArgsTool.AppName + " ";
-            WriteIndented(0, usage, string.Join(" ", new string[] {
+        {   WriteIndented(0, ArgsTool.Usage(ArgsTool.UsageFormat.Usage),
                           ArgsTool.Param(options, "server",  false),
                           ArgsTool.Param(options, "protocol", true),
                           ArgsTool.Param(options, "timeout",  true), "\n",
@@ -453,12 +418,11 @@ namespace ZIMap
                           ArgsTool.Param(options, "output",   true),
                           ArgsTool.Param(options, "log",      true), "\n",
                           ArgsTool.Param(options, "ascii",    true),
-                          ArgsTool.Param(options, "debug",    true), "[argument...]" } ));
-            WriteIndented(2, extra, string.Join(" ", new string[] {
+                          ArgsTool.Param(options, "debug",    true), "[argument...]");
+            WriteIndented(2, ArgsTool.Usage(ArgsTool.UsageFormat.More),
                           ArgsTool.Param(options, "help",    false),
-                          ArgsTool.Param(options, "command", false) } ));
-
-            TextTool.Formatter.WriteLine(ArgsTool.List(options, "Options: "));
+                          ArgsTool.Param(options, "command", false));
+            TextTool.Formatter.WriteLine(ArgsTool.Usage(ArgsTool.UsageFormat.Options, options));
 
             WriteIndented(3, null,
               "The program enters an interactive mode if no commands (non-option arguments) are " +
@@ -491,7 +455,7 @@ namespace ZIMap
             if(!(bAll || bList))
                 cmdh = string.IsNullOrEmpty(argc) ? "help" : argc;
             if(cmdh == null)
-                WriteOutput(null, ArgsTool.AppName + " implements the following commands:\n");
+                LineTool.Write(ArgsTool.AppName + " implements the following commands:\n");
 
             // configure output ...
             string preGroup = Ascii ? "=== " : "► ";
@@ -502,10 +466,9 @@ namespace ZIMap
             for(int irun=0; irun+3 < commands.Length; irun+=4)
             {   if(string.IsNullOrEmpty(commands[irun]))
                 {   if(cmdh != null) continue;
-                    if(!Ascii) Console.ForegroundColor = System.ConsoleColor.Red;
-                    WriteOutput(null, preGroup + commands[irun+3] + sufGroup);
-                    if(!Ascii) Console.ResetColor();
-                    if(!bList) WriteOutput(null, null);
+                    LineTool.Write(LineTool.Modes.Alert, "    {0}{1}{2}", 
+                                   preGroup, commands[irun+3], sufGroup);
+                    if(!bList) LineTool.Write(null);
                     continue;
                 }
 
@@ -516,7 +479,7 @@ namespace ZIMap
                 System.Text.StringBuilder args = new System.Text.StringBuilder();
                 string[] opts = commands[irun+1].Split(" ".ToCharArray());
                 string pref = commands[irun];
-                if(!Ascii) Console.ForegroundColor = System.ConsoleColor.Blue;
+                TextTool.WriteMode = LineTool.Modes.Info;
                 foreach(string opt in opts)
                 {   if(opt == "") continue;
                     args.Append("[-");
@@ -524,12 +487,12 @@ namespace ZIMap
                     args.Append("] ");
                 }
                 WriteIndented(0, pref.PadRight(10), args + commands[irun+2]);
-                if(!Ascii) Console.ResetColor();
+                TextTool.WriteMode = LineTool.Modes.Normal;
 
                 // print details ...
                 if(!bList) WriteIndented(3, preText, commands[irun+3]);
             }
-            if(bList) WriteOutput(null, null);
+            if(bList) LineTool.Write(null);
         }
 
         private static string[] options = {
@@ -706,28 +669,20 @@ namespace ZIMap
         public static void Main(string[] args)
         {   uint confirm = 0;
             ZIMapConnection.TlsModeEnum tlsmode = ZIMapConnection.TlsModeEnum.Automatic;
-/*
-            foreach(string a in args)
-            {   ZIMapExport.CreateMailboxFile(".", a);
-            }
-          //  ZIMapExport.ParseFolder(".");
-ZIMapExport.MailFile[] mf = ZIMapExport.ParseFolder(".", false);
-ZIMapExport.DumpMailFiles(mf);
-            return;
-  */          
+
             // --- step 1: parse command line arguments
             ArgsTool.Option[] opts = ArgsTool.Parse(options, args, out Commands);
             if(opts == null)
-            {   Console.WriteLine("Invalid command line. Try /help to get usage info.");
+            {   LineTool.Write("Invalid command line. Try /help to get usage info.");
                 return;
             }
             foreach(ArgsTool.Option o in opts)
             {   if(o.Error == ArgsTool.OptionStatus.Ambiguous)
-                {   Console.WriteLine("Ambiguous option: " + o.Name);
+                {   LineTool.Write("Ambiguous option: {0}", o.Name);
                     return;
                 }
                 if(o.Error != ArgsTool.OptionStatus.OK)
-                {   Console.WriteLine("Invalid option: {0}. Try /help to get usage info", o.Name);
+                {   LineTool.Write("Invalid option: {0}. Try /help to get usage info", o.Name);
                     return;
                 }
                 switch(o.Name)
@@ -739,6 +694,7 @@ ZIMapExport.DumpMailFiles(mf);
                                     return;
                     case "ascii":   Ascii = true;
                                     TextTool.UseAscii = true;
+                                    LineTool.EnableColor = false;
                                     break;
                     case "confirm": if     (o.Value == "on")  confirm = 1;
                                     else if(o.Value == "off") confirm = 2;
@@ -751,7 +707,7 @@ ZIMapExport.DumpMailFiles(mf);
                                     break;
                     case "log":     Log = o.Value;
                                     if(string.IsNullOrEmpty(Log))
-                                    {   Console.WriteLine("Missing log file");
+                                    {   LineTool.Write("No log file specified");
                                         return;
                                     }
                                     break;
@@ -770,7 +726,7 @@ ZIMapExport.DumpMailFiles(mf);
                                     break;
                     case "timeout":
                                     if(!uint.TryParse(o.Value, out Timeout))
-                                    {   Console.WriteLine("Invalid timeout: " + o.Value);
+                                    {   LineTool.Write("Invalid timeout: {0}", o.Value);
                                         return;
                                     }
                                     break;

@@ -11,41 +11,69 @@ using ZTool;
 namespace ZIMap
 {
     // =========================================================================
-    // 
+    // Hook ZIMapLib to format Debug/Error messages 
     // =========================================================================
-    class MainClass
+    class IMapCallback : ZIMapConnection.CallbackDummy
     {
-        public static void Message(string format, params object[] parameters)
-        {
-            Message(string.Format(format, parameters));
+        public override bool Monitor (ZIMapConnection connection, ZIMapMonitor level, string message)
+        {   if(message == null) return true;
+            switch(level)
+            {   case ZIMapMonitor.Debug:    LineTool.Extra(message); return true;
+                case ZIMapMonitor.Info:     LineTool.Info(message);  return true;
+                case ZIMapMonitor.Error:    LineTool.Error(message); return true;
+            }
+            return base.Monitor(connection, level, message);
         }
-        public static void Message(string message)
-        {
-            Console.WriteLine("***** " + message);
-        }
-        
-        public static void Run(string server, string prot, 
-                               ZIMapConnection.TlsModeEnum mode, uint timeout, bool debug)
+    }
+    
+    // =========================================================================
+    // Class to implement the ZIMapShell program 
+    // =========================================================================
+    class ZIMapShell
+    {
+        // The loop that does the real work
+        public static bool Run(string server, string prot, 
+                               ZIMapConnection.TlsModeEnum mode, uint timeout,
+                               string account, string password, bool debug)
         {
             ZIMapConnection connection;
             ZIMapProtocol protocol;
+            ZIMapConnection.Callback = new IMapCallback();
             
             try {
-                connection = ZIMapConnection.GetConnection(server, ZIMapConnection.GetIMapPort(prot), 
-                                                           mode, timeout);
-                connection.MonitorLevel = debug ? ZIMapMonitor.Debug : ZIMapMonitor.Error;
-                if(connection == null) {
-                    Message("Connect failed");
-                    return;
+                connection = ZIMapConnection.GetConnection(server, 
+                                ZIMapConnection.GetIMapPort(prot), mode, timeout);
+                if(connection == null) 
+                {   LineTool.Error("Connect failed");
+                    return false;
                 }
+                connection.MonitorLevel = debug ? ZIMapMonitor.Debug : ZIMapMonitor.Error;
                 protocol = connection.ProtocolLayer;
                 protocol.MonitorLevel = connection.MonitorLevel;
                 connection.TransportLayer.MonitorLevel = connection.MonitorLevel;
-                Message(protocol.ServerGreeting);
+                LineTool.Info(protocol.ServerGreeting);
             }
             catch(Exception e) {
-                Message("Connect failed with exception: " + e.Message);
-                return;
+                LineTool.Error("Connect failed with exception: {0}", e.Message);
+                return false;
+            }
+            
+            if(!string.IsNullOrEmpty(account))
+            {   StringBuilder sb = new StringBuilder("LOGIN ");
+                if(!ZIMapConverter.QuotedString(sb, account, false) ||
+                   sb.Append(' ') == null ||
+                   !ZIMapConverter.QuotedString(sb, password, false))
+                {   LineTool.Error("Error: Can use only 7-bit data for '-account'");
+                    return false;
+                }
+                LineTool.Info(sb.ToString());                
+                protocol.Send(sb.ToString());
+                ZIMapReceiveData data;
+                protocol.Receive(out data);
+                if(!data.Succeeded)
+                {   LineTool.Error("Error: {0}", data.Message);
+                    return false;
+                }
             }
             
             string[] command;
@@ -59,43 +87,55 @@ namespace ZIMap
                     ZIMapReceiveState info;
                     do {
                         info = protocol.Receive(out tag, out status, out message);
-                        Console.WriteLine("      {0} {1} {2}", tag, status, message);
+                        LineTool.Message("{0} {1} {2}", tag, status, message);
                     }
                     while(info == ZIMapReceiveState.Info);
                     
-                    if(connection.IsTransportClosed) return;
+                    if(connection.IsTransportClosed) return false;
                 }
                 catch(Exception e) {
-                    Message("Command failed with exception: " + e.Message);
-                    return;
+                    LineTool.Error("Command failed with exception: {0}", e.Message);
                 }
             }
+            return true;
         }
         
+        // Print usage info
         public static void Usage()
-        {   Console.WriteLine("Usage:   {0} {1} {2} {3} {4}", ArgsTool.AppName,
+        {   Console.WriteLine(ArgsTool.Usage(ArgsTool.UsageFormat.Usage,
                           ArgsTool.Param(options, "server",  false),
                           ArgsTool.Param(options, "protocol", true),
+                          ArgsTool.Param(options, "account",  true)));
+            Console.WriteLine(ArgsTool.Usage(ArgsTool.UsageFormat.Cont,
+                          ArgsTool.Param(options, "password", true),
                           ArgsTool.Param(options, "timeout",  true),
-                          ArgsTool.Param(options, "debug",    true));
-            Console.WriteLine("         {0} -help\n\n{1}\n", ArgsTool.AppName,
-                          ArgsTool.List(options, "Options: "));
+                          ArgsTool.Param(options, "ascii",    true),
+                          ArgsTool.Param(options, "debug",    true)));
+            Console.WriteLine(ArgsTool.Usage(ArgsTool.UsageFormat.More, "-help"));
+            Console.WriteLine("\n{0}\n",
+                          ArgsTool.Usage(ArgsTool.UsageFormat.Options, options));
         }
         
         private static string[] options = {
             "server",   "host",     "Connect to a server at {host}",
             "protocol", "name",     "Use the protocol {name}             (default: imap)",
+            "account",  "user",     "Login using the {user} account",
+            "password", "text",     "Use the login password {text}",
             "timeout",  "seconds",  "Connection/Read/Write timeout         (default: 30)",
+            "ascii",    "",         "Do not use line drawing chars or colors",
             "debug",    "",         "Output debug information",
             "help",     "",         "Print this text and quit",
         };
 
+        // Parse the command line, connect to the server and run command loop
         public static void Main(string[] args)
-        {
-            string server  = null;
+        {   string server  = null;
+            string account = null;
+            string password= null;
             string prot    = "imap";
             uint   timeout = 30;
             bool   debug   = false;
+
             ZIMapConnection.TlsModeEnum tlsmode = ZIMapConnection.TlsModeEnum.Automatic;
 
             ArgsTool.Option[] opts = ArgsTool.Parse(options, args);
@@ -116,6 +156,8 @@ namespace ZIMap
                 {   case "?":   
                     case "help":    Usage();
                                     return;
+                    case "ascii":   LineTool.EnableColor = false;   
+                                    break;
                     case "debug":   debug = true;
                                     break;
                     case "server":  server = o.Value;
@@ -135,7 +177,12 @@ namespace ZIMap
                                         return;
                                     }
                                     break;
-                }
+                    case "account": account = o.Value;
+                                    break;
+                    case "password":
+                                    password = o.Value;
+                                    break;
+               }
             }
             opts = null;
 
@@ -144,9 +191,17 @@ namespace ZIMap
                 if(string.IsNullOrEmpty(server)) return;
             }
 
-            Message("Connecting {0}://{1} ...", prot, server);
-            Run(server, prot, tlsmode, timeout, debug);
-            Message("Quit");
+            if(account != null && password == null)
+            {   password = System.Environment.GetEnvironmentVariable("ZIMAP_PWD");
+                if(string.IsNullOrEmpty(password))
+                {   password = LineTool.Prompt("Password");
+                    if(string.IsNullOrEmpty(password)) return;
+                }
+            }
+            
+            LineTool.Message("Connecting {0}://{1} ...", prot, server);
+            if(Run(server, prot, tlsmode, timeout, account, password, debug))
+                LineTool.Info("Exit after empty input line");
         }
     }
 }
