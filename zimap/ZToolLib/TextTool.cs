@@ -32,8 +32,8 @@ namespace ZTool
         public static string        Prefix;
         /// <summary>The formatter to used, set by <see cref="GetDefaultFormatter"/>.</summary>
         public static IFormatter    Formatter;
-        ///
-        public static TextWriter    Writer;
+        /// <summary>Value passed to <see cref="TextTool.Write(uint, string)"/>.</summary>
+        public static uint          WriteMode;
 
         /// <summary>Controls the horizontal alignment of text.</summary>
         public enum Adjust
@@ -96,7 +96,7 @@ namespace ZTool
             public virtual string GetIndexSeparator()      {   return " │ ";   }
             public virtual string GetColumnSeparator()     {   return "  ";    }
             public virtual string GetEllipses()            {   return "►";     }
-            public virtual void   WriteLine(string line)   {   Writer.WriteLine(Prefix + line);    }
+            public virtual void   WriteLine(string line)   {   LineTool.Write(TextTool.WriteMode, Prefix + line);    }
         }
         
         // ASCII Formatter
@@ -110,20 +110,18 @@ namespace ZTool
             public virtual string GetIndexSeparator()      {   return " | ";   }
             public virtual string GetColumnSeparator()     {   return "  ";    }
             public virtual string GetEllipses()            {   return "...";   }
-            public virtual void   WriteLine(string line)   {   Writer.WriteLine(Prefix + line);    }
+            public virtual void   WriteLine(string line)   {   LineTool.Write(TextTool.WriteMode, Prefix + line);    }
         }
         
         public static IFormatter GetDefaultFormatter()
-        {   if(AutoWidth)
-            {   TextWidth = (uint)Console.WindowWidth;
-                uint upre = 0;
-                if(Prefix != null) upre = (uint)Prefix.Length;
-                if(upre < TextWidth) TextWidth -= upre;
-            }
+        {   if(AutoWidth) TextWidth = LineTool.WindowWidth(0);
             if(TextWidth == 0) TextWidth = 80;
-            if(Writer == null) Writer = Console.Out;
+            uint upre = 0;
+            if(Prefix != null) upre = (uint)Prefix.Length;
+            if(upre < TextWidth) TextWidth -= upre;
          
             if(Formatter != null) return Formatter;
+            WriteMode = LineTool.Modes.Normal; 
             Formatter = UseAscii ? (IFormatter)(new FormatterAscii()) 
                                  : (IFormatter)(new FormatterUnicode());
            return Formatter;

@@ -18,6 +18,9 @@ namespace ZTool
     // ArgsTool class - Reading and parsing command lines
     //==========================================================================
     
+    /// <summary>
+    /// Class to parse command lines.
+    /// </summary>
     public class ArgsTool
     {
         /// <value>Usually this will contain the application name</value>
@@ -37,9 +40,15 @@ namespace ZTool
             /// <value>Invalid use of an option (argument missing)</value>
             Invalid = -3
         }
-        
+
+        /// <summary>
+        /// Value representing an option argument.
+        /// </summary>
+        /// <remarks>An <see cref="Option"/> array is returned be
+        /// <see cref="Parse(string[], string[])"/>
+        /// </remarks>
         public struct Option
-        {
+        {   /// <summary>The option name</summary>
             public string       Name;
             public string       Value;
             public string[]     SubValues;
@@ -192,6 +201,56 @@ namespace ZTool
         {   string[] extra;
             Option[] opts = Parse(options, argv, out extra, false);
             return (extra == null) ? opts : null;
+        }
+
+        /// <summary>
+        /// Controls how <see cref="Usage"/> will format the output. 
+        /// </summary>
+        public enum UsageFormat
+        {   /// <value>Prefix with 'Usage:  ' and program name</value>
+            Usage,
+            /// <value>Prefix only with spaces (continuation line)</value>
+            Cont,
+            /// <value>Prefix with spaces and program name</value>
+            More,
+            /// <value>Output an option list, see <see cref="List"/></value>
+            Options
+        }
+        
+        /// <summary>
+        /// Helper to format usage messages for a program.
+        /// </summary>
+        /// <param name="mode">
+        /// Controls what is to be formatted.
+        /// </param>
+        /// <param name="pars">
+        /// Usually an array of strings, see remarks.
+        /// </param>
+        /// <returns>
+        /// The formatted result.
+        /// </returns>
+        /// <remarks>
+        /// The parameter array must be an array of strings when using
+        /// <see cref="UsageFormat.Options"/>.  For all other formats
+        /// the <see cref="object.ToString"/> gets called.
+        /// </remarks>
+        public static string Usage(UsageFormat mode, params object[] pars)
+        {
+            StringBuilder sb = new StringBuilder();
+            if(mode == UsageFormat.Usage)
+                sb.Append("Usage:   " + ArgsTool.AppName);
+            else if(mode == UsageFormat.More)
+                sb.Append("         " + ArgsTool.AppName);
+            else if(mode == UsageFormat.Cont)
+                sb.Append(' ', ArgsTool.AppName.Length + 9);
+            else
+            {   sb.Append(List((string[])pars, "Options: "));
+                return sb.ToString();
+            }
+            
+            sb.Append(' ');
+            foreach(object o in pars) sb.Append(o);
+            return sb.ToString();
         }
     }
 }
