@@ -119,8 +119,10 @@ namespace ZIMap
         private Stream  stream;
         // Timeout in seconds
         private uint    timeout;
-        // Sent by Send() for a new Request
+        // Set by Send() for a new Request
         private bool    startRequest;
+        // Set by Poll(), cleared by Send()
+        private bool    haveTimeout;
         // set by Send() for SELECT/EXAMINE
         private uint    selectTag;
 
@@ -157,6 +159,17 @@ namespace ZIMap
         }
 
         /// <summary>
+        /// Can be used to check if the last error was a timeout
+        /// </summary>
+        /// <value>A value of <c>true</c> indicates a timeout.
+        /// <remarks>Timeouts are usually detected by <see cref="Poll"/> because the
+        /// timeout on socket level will be disabled after the 1st message received.
+        /// </remarks>
+        public bool IsTimeout
+        {   get {   return haveTimeout; }
+        }
+
+        /// <summary>
         /// Can be used to check for queued server response data
         /// </summary>
         /// <value>A value of <c>true</c> indicates that a server reply is queued.
@@ -180,10 +193,8 @@ namespace ZIMap
         /// </remarks>
         public uint LastSelectTag
         {   get {   return selectTag;   }
-            set {   if(value != 0)
-                        Error(ZIMapErrorCode.InvalidArgument, "Value must be 0");
-                    else
-                        selectTag = 0;
+            set {   selectTag = 0;
+                    if(value != 0) Error(ZIMapErrorCode.MustBeZero);
                 }
         }
 
@@ -491,7 +502,7 @@ namespace ZIMap
         /// </remarks>
         public bool Send(string fragment)
         {   if(fragment == null)
-            {   Error(ZIMapErrorCode.InvalidArgument, "Fragment is null");
+            {   Error(ZIMapErrorCode.MustBeNonZero);
                 return false;
             }
             if(stream == null)
@@ -508,10 +519,11 @@ namespace ZIMap
             }
             else
                 Monitor(ZIMapMonitor.Info, "Send: void");
+            startRequest = false;
+            haveTimeout = false;
             stream.WriteByte(13);
             stream.WriteByte(10);
             stream.Flush();
-            startRequest = false;
             return true;
         }
 
@@ -705,10 +717,12 @@ namespace ZIMap
                 if(inner is System.Net.Sockets.SocketException &&
                    (inner.Message.Contains("timed out") ||
                     inner.Message.Contains("period of time")))
+                {   haveTimeout = true;
                     Monitor(ZIMapMonitor.Debug, "ReaderRead: Timeout");
+                }
                 else
                 {   Monitor(ZIMapMonitor.Error, "ReaderRead: exception: " + ex.Message);
-                    if(inner != null)
+                    if(inner != null && ex.Message != inner.Message)
                         Monitor(ZIMapMonitor.Info, "ReaderRead: exception: " + inner.Message);
                 }
                 return -1;
@@ -855,6 +869,7 @@ namespace ZIMap
             else
                 if(!rdr_res.AsyncWaitHandle.WaitOne((int)timeout*1000, false))
                 {   Monitor(ZIMapMonitor.Error, "ReaderPoll: Timeout ");
+                    haveTimeout = true;
                     return false;
                 }
 

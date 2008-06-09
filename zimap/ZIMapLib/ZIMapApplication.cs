@@ -33,6 +33,7 @@ namespace ZIMap
         private ZIMapConnection connection;        
         private ZIMapFactory    factory;
         private ZIMapServer     server;
+        private ZIMapExport     export;
             
         private string          username;
         private uint            timeout = 30;
@@ -40,6 +41,7 @@ namespace ZIMap
         private bool            monitorAll = false;
         private uint            fetchBlock = 50;
         private uint            progress = 100;
+        private uint            exportSerial;
         
         // feature flags ...
         private bool            enableNamespaces = true;
@@ -127,6 +129,27 @@ namespace ZIMap
         public bool EnableUidCommands
         {   get {   return enableUid;  }
             set {   enableUid = value; }
+        }
+        
+        /// <summary>
+        /// Get or set the current Import/Export object.
+        /// </summary>
+        /// <remarks>
+        /// Use a set value of <c>null</c> to close to current <see cref="ZIMapExport"/>.
+        /// </remarks>
+        public ZIMapExport Export
+        {   get {   if(export != null && exportSerial == export.Serial) return export;
+                    export = new ZIMapExport(this.connection);
+                    export.MonitorLevel = monitorLevel;
+                    exportSerial = 0;
+                    return export;  
+                }
+            set {   if(value != null) MonitorError("Value must be null");
+                    else if(export != null)
+                    {   export.Dispose();
+                        exportSerial = 0;
+                    }
+                }
         }
         
         public ZIMapFactory Factory
@@ -998,9 +1021,24 @@ namespace ZIMap
         }
                 
         // =====================================================================
-        // 
+        // Import/Export 
         // =====================================================================
 
+        public ZIMapExport OpenExport(string path, bool allowFile, bool preferVersions)
+        {   ZIMapExport expo = Export;
+            expo.Versioning = true;
+            exportSerial = expo.Open(path, allowFile, true, allowFile);
+            if(exportSerial == 0) return null;              // open failed
+            return expo;
+        }
+        
+        public ZIMapExport OpenImport(string path, bool allowFile)
+        {   ZIMapExport expo = Export;
+            exportSerial = expo.Open(path, allowFile, false, false);
+            if(exportSerial == 0) return null;              // open failed
+            return expo;
+        }
+        
         // TODO: ZIMapApplication: RunSequence for progress bar
         // TODO: ZIMapApplication: Nesting(level, percent) for progress bar
         

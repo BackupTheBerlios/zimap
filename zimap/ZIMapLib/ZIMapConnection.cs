@@ -243,9 +243,9 @@ namespace ZIMap
         public TlsModeEnum TlsMode
         {   get {   return tlsmode;
                 }
-            set {   if(tlsmode == TlsModeEnum.IMaps &&
-                       value == TlsModeEnum.IMaps)
-                    {   Error(ZIMapErrorCode.InvalidArgument, "IMAPs is special");
+            set {   if(tlsmode == value) return;
+                    if(tlsmode == TlsModeEnum.IMaps || value == TlsModeEnum.IMaps)
+                    {   Error(ZIMapErrorCode.InvalidArgument, "Cannot change to/from IMaps");
                         return;
                     }
                     tlsmode = value;

@@ -53,6 +53,12 @@ namespace ZIMap
         NotImplemented,
         /// <summary>A method was called with an inavalid argument</summary>
         InvalidArgument,
+        /// <summary>Invalid argument, value must be 0 or null</summary>
+        MustBeZero,
+        /// <summary>Invalid argument, value cannot be 0 or null</summary>
+        MustBeNonZero,
+        /// <summary>Something unexpected has happened</summary>
+        Unexpected,
         
         /// <summary>Unknow error (was an invalid error code)</summary>
         Unknown     // must be last
@@ -148,7 +154,10 @@ namespace ZIMap
                         "Command in wrong state",
                         "Feature not implemented",
                         "The argument is invalid",
-            
+                        "Value must be 0 or null",
+                        "Value cannot be 0 or null",
+                        "Internal error, unexpected data",
+
             /*Unknown*/ "Unknown error"     // must be last
         };
 

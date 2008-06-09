@@ -55,10 +55,9 @@ namespace ZIMap
                     parser = new ZIMapParser(Message);
                     return parser;
                 }
-            set {   if(value == null)
-                        parser = null;
-                    else
-                        ZIMapException.Throw(null, ZIMapErrorCode.InvalidArgument, "must be null");
+            set {   parser = null;
+                    if(value == null) return; 
+                    ZIMapException.Throw(null, ZIMapErrorCode.MustBeZero, null);
                 }
         }
         
@@ -119,10 +118,9 @@ namespace ZIMap
                     parser = new ZIMapParser(Message);
                     return parser;
                 }
-            set {   if(value == null)
-                        parser = null;
-                    else
-                        ZIMapException.Throw(null, ZIMapErrorCode.InvalidArgument, "must be null");
+            set {   parser = null;
+                    if(value == null) return;
+                    ZIMapException.Throw(null, ZIMapErrorCode.MustBeZero, null);
                 }
         }
 
@@ -395,16 +393,18 @@ namespace ZIMap
                     }
                     
                     if(info == null)
-                    {   Error(ZIMapErrorCode.InvalidArgument);
+                    {   Error(ZIMapErrorCode.MustBeNonZero);
                         return 0;
                     }
                 }
                 if(transport.IsClosed)
                 {   info = "transport closed";
                     ZIMapConnection.Callback.Closed(connection);
-                }                    
-                else   
+                }
+                if(transport.IsTimeout)
                     info = "transport timeout";
+                else   
+                    info = "transport IO error";
                 
             }
             catch(Exception inner)

@@ -1,0 +1,35 @@
+<Project name="ZIMapLib" fileversion="2.0" language="C#" clr-version="Net_2_0" ctype="DotNetProject">
+  <Configurations active="Debug">
+    <Configuration name="Debug" ctype="DotNetProjectConfiguration">
+      <Output directory="bin/Debug" assemblyKeyFile="." assembly="ZIMapLib" />
+      <Build debugmode="True" target="Library" />
+      <Execution runwithwarnings="True" consolepause="False" runtime="MsNet" clr-version="Net_2_0" />
+      <CodeGeneration compiler="Mcs" warninglevel="4" optimize="True" unsafecodeallowed="False" generateoverflowchecks="True" definesymbols="DEBUG,MONO_BUILD" generatexmldocumentation="False" ctype="CSharpCompilerParameters" />
+    </Configuration>
+    <Configuration name="Release" ctype="DotNetProjectConfiguration">
+      <Output directory="bin/Release" assembly="ZIMapLib" />
+      <Build debugmode="False" target="Library" />
+      <Execution runwithwarnings="True" consolepause="False" runtime="MsNet" clr-version="Net_2_0" />
+      <CodeGeneration compiler="Mcs" warninglevel="4" optimize="True" unsafecodeallowed="False" generateoverflowchecks="True" definesymbols="MONO_BUILD" generatexmldocumentation="False" ctype="CSharpCompilerParameters" />
+    </Configuration>
+  </Configurations>
+  <Contents>
+    <File name="AssemblyInfo.cs" subtype="Code" buildaction="Compile" />
+    <File name="ZIMapTransport.cs" subtype="Code" buildaction="Compile" />
+    <File name="ZIMapCommand.cs" subtype="Code" buildaction="Compile" />
+    <File name="ZIMapConnection.cs" subtype="Code" buildaction="Compile" />
+    <File name="ZIMapConverter.cs" subtype="Code" buildaction="Compile" />
+    <File name="ZIMapFactory.cs" subtype="Code" buildaction="Compile" />
+    <File name="ZIMapProtocol.cs" subtype="Code" buildaction="Compile" />
+    <File name="ZIMapTools.cs" subtype="Code" buildaction="Compile" />
+    <File name="ZIMapCommandEx.cs" subtype="Code" buildaction="Compile" />
+    <File name="ZIMapApplication.cs" subtype="Code" buildaction="Compile" />
+    <File name="ZIMapServer.cs" subtype="Code" buildaction="Compile" />
+    <File name="ZIMapMessage.cs" subtype="Code" buildaction="Compile" />
+    <File name="ZIMapExport.cs" subtype="Code" buildaction="Compile" />
+  </Contents>
+  <References>
+    <ProjectReference type="Gac" localcopy="True" refto="System, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089" />
+    <ProjectReference type="Gac" localcopy="True" refto="Mono.Security, Version=2.0.0.0, Culture=neutral, PublicKeyToken=0738eb9f132ed756" />
+  </References>
+</Project>

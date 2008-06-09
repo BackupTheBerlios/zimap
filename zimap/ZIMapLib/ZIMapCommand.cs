@@ -179,7 +179,7 @@ namespace ZIMap
                str = "\"\"";
             else foreach(char chr in str)
                 if((uint)chr <= 20 || (uint)chr >= 127 || chr == '"' || chr == '\\')
-                {   Error(ZIMapErrorCode.InvalidArgument);
+                {   Error(ZIMapErrorCode.InvalidArgument, "Has invalid char");
                     return false;
                 }
             if(args == null || args == "")  args  = str;
@@ -205,7 +205,7 @@ namespace ZIMap
         /// </remarks>
         public bool AddDirect(object arg)
         {   if(arg == null)
-            {   Error(ZIMapErrorCode.InvalidArgument, "null");
+            {   Error(ZIMapErrorCode.MustBeNonZero);
                 return false;
             }
             string argv = arg.ToString();
@@ -218,7 +218,7 @@ namespace ZIMap
         
         public bool AddSequence(uint[] items)
         {   if(items == null)
-            {   Error(ZIMapErrorCode.InvalidArgument, "null");
+            {   Error(ZIMapErrorCode.MustBeNonZero);
                 return false;
             }
             if(items.Length == 1)
@@ -306,7 +306,7 @@ namespace ZIMap
             {   arg = argument.ToString();
                 if(!ZIMapConverter.Check7BitText(arg))
                 {   if(!allowLiteral)
-                    {   Error(ZIMapErrorCode.InvalidArgument, "has 8bit char");
+                    {   Error(ZIMapErrorCode.InvalidArgument, "Has 8bit char");
                         return false;
                     }
                     return AddLiteral(arg);
@@ -559,7 +559,7 @@ namespace ZIMap
                 return false;
             }
             if(tag != rdata.Tag)
-            {   Error(ZIMapErrorCode.InvalidArgument, "wrong tag");
+            {   Error(ZIMapErrorCode.InvalidArgument, "Unexpected tag");
                 return false;
             }
                 

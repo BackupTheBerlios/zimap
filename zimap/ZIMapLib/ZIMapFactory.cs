@@ -72,10 +72,8 @@ namespace ZIMap
                     }
                     return capabilities;
                 }
-            set {   if(value != null)
-                        Error(ZIMapErrorCode.InvalidArgument, "must by null");
-                    else
-                        capabilities = null;
+            set {   capabilities = null;
+                    if(value != null) Error(ZIMapErrorCode.MustBeZero);
                 }
         }
 
@@ -138,10 +136,8 @@ namespace ZIMap
                     }
                     return hierarchyDelimiter;
                 }
-            set {   if(value != (char)0)
-                        Error(ZIMapErrorCode.InvalidArgument, "must by zero");
-                    else
-                        hierarchyDelimiter = (char)0;
+            set {   hierarchyDelimiter = (char)0;
+                    if(value != (char)0) Error(ZIMapErrorCode.MustBeZero);
                 }
         }
         
