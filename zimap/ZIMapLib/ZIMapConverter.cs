@@ -498,32 +498,121 @@ namespace ZIMap
         // =====================================================================
         // Static methods for Time conversion
         // =====================================================================
-        /* Testing DateTime conversions ...
-         *  
-        DateTime loc = DateTime.Now;            
-        DateTime utc = DateTime.UtcNow;
-        Console.WriteLine(ZIMapConverter.EncodeTime(loc, false) + " " + loc.Kind + " " + loc.Hour);
-        Console.WriteLine(ZIMapConverter.EncodeTime(utc, true) + " " + utc.Kind + " " + utc.Hour);
-        loc = ZIMapConverter.DecodeTime("18-May-2008 11:20:06 +0200", false);
-        utc = ZIMapConverter.DecodeTime("18-May-2008 11:20:06 +0200", true);
-        Console.WriteLine(ZIMapConverter.EncodeTime(loc, false) + " " + loc.Kind + " " + loc.Hour);
-        Console.WriteLine(ZIMapConverter.EncodeTime(utc, true) + " " + utc.Kind + " " + utc.Hour);
-        */
-        
-        public static DateTime DecodeTime(string imapTime, bool toUTC)
+
+        private static System.Globalization.DateTimeFormatInfo DTInfo =
+            System.Globalization.CultureInfo.InvariantCulture.DateTimeFormat;
+
+        /// <summary>
+        /// Convert an RFC 3501 formatted string to <see cref="DateTime"/>.
+        /// </summary>
+        /// <param name="imapTime">
+        /// Date string in the format: "18-May-2008 11:20:06 +0200".
+        /// </param>
+        /// <param name="toUTC">
+        /// When <c>true</c> the result is converted to UTC, oherwise it is
+        /// returned as local time.
+        /// </param>
+        /// <returns>
+        /// The conversion result or <see cref="DateTime.MinValue"/> on
+        /// error.
+        /// </returns>
+        public static DateTime DecodeIMapTime(string imapTime, bool toUTC)
         {   DateTime res;
             if(!DateTime.TryParse(imapTime, out res))
                 return DateTime.MinValue;
             return toUTC ? res.ToUniversalTime() : res;
         }
 
-        public static string EncodeTime(DateTime time, bool fromUTC)
-        {   if(fromUTC) time = time.ToLocalTime();
-            string ts = time.ToString("dd-MMM-yyyy hh:mm:ss zzz",
-                System.Globalization.CultureInfo.InvariantCulture.DateTimeFormat);
+        /// <summary>
+        /// Format a date in IMap representation (see RFC 3501)
+        /// </summary>
+        /// <param name="time">
+        /// The <see cref="DateTime"/> to be formatted.  The values
+        /// <see cref="DateTime.MinValue"/> and <see cref="DateTime.MaxValue"/>
+        /// are replaced by <see cref="DateTime.Now"/>.
+        /// </param>
+        /// <returns>
+        /// Date string in the format: "18-May-2008 11:20:06 +0200".
+        /// </returns>
+        /// <remarks>
+        /// Asctime is a legacy UNIX format, the name is taken from the C-library
+        /// routine that creates strings in this format.
+        /// <para />
+        /// If the <see cref="DateTime"/> argument is in UTC (e.g. is of kind
+        /// <see cref="DateTimeKind.Unspecified"/>) the time is converted to local
+        /// time because the RFC 3501 format uses the local time plus a timezone offset.
+        /// </remarks>
+        public static string EncodeIMapTime(DateTime time)
+        {   if(time == DateTime.MinValue || time == DateTime.MaxValue)
+                time = DateTime.Now;
+            else if(time.Kind == DateTimeKind.Utc)
+                time = time.ToLocalTime();
+            string ts = time.ToString("dd-MMM-yyyy HH:mm:ss zzz", DTInfo);
             int col = ts.LastIndexOf(':');
             if(col > 0) ts = ts.Remove(col, 1);
             return ts;
+        }
+
+        /// <summary>
+        /// Convert an asctime string to <see cref="DateTime"/>.
+        /// </summary>
+        /// <param name="ascTime">
+        /// The string in the format "Fri Jun 13 21:00:21 2008".
+        /// </param>
+        /// <param name="fromUTC">
+        /// For <c>true</c> the input string is assumed to be UTC whereas
+        /// <c>false</c> will assume a local time string.
+        /// </param>
+        /// <returns>
+        /// The conversion result or <see cref="DateTime.MinValue"/> on
+        /// error.
+        /// </returns>
+        /// <remarks>
+        /// Asctime is a legacy UNIX format, the name is taken from the C-library
+        /// routine that creates strings in this format.
+        /// </remarks>
+        public static DateTime DecodeAscTime(string ascTime, bool fromUTC) 
+        {   DateTime res;
+            DateTime.TryParseExact(ascTime, "ddd MMM d HH:mm:ss yyyy", DTInfo, 
+                fromUTC ? System.Globalization.DateTimeStyles.AssumeUniversal
+                        : System.Globalization.DateTimeStyles.AssumeLocal, out res);
+            return res;
+        }
+
+        /// <summary>
+        /// Output <see cref="DateTime"/> as asctime string.
+        /// </summary>
+        /// <param name="time">
+        /// The <see cref="DateTime"/> value to be converted.  The values
+        /// <see cref="DateTime.MinValue"/> and <see cref="DateTime.MaxValue"/>
+        /// are replaced by <see cref="DateTime.Now"/>.
+        /// </param>
+        /// <param name="toUTC">
+        /// For <c>true</c> the output string will be returned as UTC whereas
+        /// <c>false</c> will return a local time string.
+        /// </param>
+        /// <returns>
+        /// The string representation of the time in the format 
+        /// "Fri Jun 13 21:00:21 2008".
+        /// </returns>
+        /// <remarks>
+        /// Asctime is a legacy UNIX format, the name is taken from the C-library
+        /// routine that creates strings in this format.
+        /// <para />
+        /// An exception with code <see cref="ZIMapException.Error.InvalidArgument"/>
+        /// is thrown if the <see cref="DateTime"/> argument is neither UTC nor
+        /// local time (e.g. is of kind <see cref="DateTimeKind.Unspecified"/>).
+        /// </remarks>
+        public static string EncodeAscTime(DateTime time, bool toUTC)
+        {   if(time == DateTime.MinValue || time == DateTime.MaxValue)
+                time = DateTime.Now;
+            else if(time.Kind == DateTimeKind.Unspecified)
+            {   ZIMapException.Throw(null, ZIMapException.Error.InvalidArgument,
+                                     "time kind is 'Unspecified'");
+                return null;
+            }
+            time = toUTC ? time.ToUniversalTime() : time.ToLocalTime();
+            return time.ToString("ddd MMM d HH:mm:ss yyyy", DTInfo);
         }
 
         // =====================================================================
@@ -538,6 +627,28 @@ namespace ZIMap
                 return emptyStringArray;
             }
             return new string[size];
+        }
+
+        private static string[] splitArray = new string[] { " " };
+        
+        /// <summary>
+        /// Splits a string of space separated words to an array of words. 
+        /// </summary>
+        /// <param name="words">
+        /// Any text or <c>null</c>.
+        /// </param>
+        /// <returns>
+        /// When the input string was <c>>null</c> a value of <c>>null</c> is
+        /// returned, otherwise an array.  The returned array can be empty.
+        /// </returns>
+        /// <remarks>
+        /// Multiple spaces are ignored, this routine does not return empty
+        /// strings in the result array.
+        /// </remarks>
+        public static string[] StringArray(string words)
+        {   if(words == null) return null;
+            if(words == "")   return StringArray(0);
+            return words.Split(splitArray, StringSplitOptions.RemoveEmptyEntries);
         }
     }
 }

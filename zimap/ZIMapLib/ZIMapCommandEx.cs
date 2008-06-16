@@ -34,17 +34,7 @@ namespace ZIMap
         // ---------------------------------------------------------------------
         // Append
         // ---------------------------------------------------------------------
-        /*
-            string msg = "From: info@j-pfennnig.de\r\n" +
-                         "To: info@j-pfennig.de\r\n" +
-                         "Subject: IMAP Testing\r\n" +
-                         "\r\n" +
-                         "This is a test.\r\n";
-            ZIMapCommand.Append acmd = app.Factory.CreateAppend();
-            acmd.Queue("Spam", @"(\Seen)", System.Text.ASCIIEncoding.ASCII.GetBytes(msg));
-            acmd.Execute(true);
-        */
-        
+       
         /// <summary>
         /// A class that handles the APPEND IMap command.
         /// </summary>
@@ -55,20 +45,52 @@ namespace ZIMap
         {
             public Append(ZIMapFactory parent) : base(parent, "APPEND") {}
 
+            /// <summary>
+            /// Queues the command to append a message to a mailbox.
+            /// </summary>
+            /// <param name="mailbox">The full mailbox name.</param>
+            /// <param name="flags">
+            /// A string containing IMap flags in valid list syntax or <c>null</c>.
+            /// </param>
+            /// <param name="message">The mail data containing header and body.</param>
+            /// <returns>
+            /// When the command could be queued<c>true</c> is returned.
+            /// </returns>
             public bool Queue(string mailbox, string flags, byte[] message)
             {   return Queue(mailbox, flags, DateTime.MinValue, message);
             }
             
+            /// <summary>
+            /// Queues the command to append a message to a mailbox.
+            /// </summary>
+            /// <param name="mailbox">The full mailbox name.</param>
+            /// <param name="flags">
+            /// A string containing IMap flags in valid list syntax or <c>null</c>.
+            /// </param>
+            /// <param name="time">
+            /// The IMap INTERNALDATE or <see cref="DateTime.MinValue"/> to ignore the value.
+            /// </param>
+            /// <param name="message">The mail data containing header and body.</param>
+            /// <returns>
+            /// When the command could be queued<c>true</c> is returned.
+            /// </returns>
             public bool Queue(string mailbox, string flags, DateTime time, byte[] message)
             {   if(message == null) return false;
                 if(string.IsNullOrEmpty(mailbox)) return false;
                 
                 AddMailbox(mailbox);
                 if(!string.IsNullOrEmpty(flags))
-                    AddList(flags);
+                {   string[] farr = ZIMapConverter.StringArray(flags);
+                    bool badd = false;
+                    for(int iarr=0; iarr < farr.Length; iarr++)
+                        if(farr[iarr].ToLower() == @"\recent") farr[iarr] = null;
+                        else badd = true;
+                    if(badd) AddList(farr);         // do not add an empty list
+                }
                 if(time != DateTime.MinValue)
-                    AddString(ZIMapConverter.EncodeTime(time, false));
-                return AddLiteral(message);
+                    AddString(ZIMapConverter.EncodeIMapTime(time));
+                AddLiteral(message);
+                return Queue();
             }
         }
 
@@ -155,6 +177,12 @@ namespace ZIMap
         // Copy
         // ---------------------------------------------------------------------
 
+        /// <summary>
+        /// A class that handles the COPY IMap command.
+        /// </summary>
+        /// <remarks>
+        /// The class overloads the Query() method.
+        /// </remarks>
         public class Copy : SequenceBase
         {
             public Copy(ZIMapFactory parent) : base(parent, "COPY") {}
@@ -164,6 +192,12 @@ namespace ZIMap
         // Create
         // ---------------------------------------------------------------------
 
+        /// <summary>
+        /// A class that handles the CREATE IMap command.
+        /// </summary>
+        /// <remarks>
+        /// The class overloads the Query() method.
+        /// </remarks>
         public class Create : MailboxBase
         {
             public Create(ZIMapFactory parent) : base(parent, "CREATE") {}
@@ -173,6 +207,12 @@ namespace ZIMap
         // Delete
         // ---------------------------------------------------------------------
 
+        /// <summary>
+        /// A class that handles the DELETE IMap command.
+        /// </summary>
+        /// <remarks>
+        /// The class overloads the Query() method.
+        /// </remarks>
         public class Delete : MailboxBase
         {
             public Delete(ZIMapFactory parent) : base(parent, "DELETE") {}
@@ -183,6 +223,12 @@ namespace ZIMap
         // Expunge
         // ---------------------------------------------------------------------
 
+        /// <summary>
+        /// A class that handles the EXPUNGE IMap command.
+        /// </summary>
+        /// <remarks>
+        /// The class overloads the Query() method.
+        /// </remarks>
         public class Expunge : Generic
         {
             public Expunge(ZIMapFactory parent) : base(parent, "EXPUNGE") {}
@@ -200,7 +246,7 @@ namespace ZIMap
                     return true;
                 }
             
-                ZIMapReceiveData data = Data;
+                ZIMapProtocol.ReceiveData data = Result;
                 if(data.Infos == null) return false;
                 List<uint> list = new List<uint>();
                 for(int irun=0; irun < data.Infos.Length; irun++)            
@@ -220,15 +266,36 @@ namespace ZIMap
         // Fetch
         // ---------------------------------------------------------------------
 
+        /// <summary>
+        /// A class that handles the FETCH IMap command.
+        /// </summary>
+        /// <remarks>
+        /// The class overloads the Query() method.
+        /// </remarks>
         public class Fetch : SequenceBase
         {
+            /// <summary>Parsed result of the Fetch command</summary>
+            /// <remarks>Obtained from <see cref="Items"/>, which in turn
+            /// calls <see cref="Parse(bool)"/> if neccessary.</remarks>
             public struct Item
             {   public  uint        Index;          // index in mailbox
                 public  uint        UID;            // uid (needs UID part)
                 public  uint        Size;           // data size (needs RFC822.SIZE)
                 public  string[]    Parts;          // unparsed parts
                 public  string[]    Flags;          // flags (needs FLAGS)
-                public  byte[]      Literal;        // literal data
+
+                internal object     Data;           // literal data 
+
+                public  byte[]      Literal(uint index)
+                {   if(Data == null) return null;
+                    byte[][] arr = Data as byte[][];
+                    if(arr == null)
+                    {   if(index > 0) return null;
+                        return (byte[])Data;
+                    }
+                    if(index >= arr.Length) return null;
+                    return arr[index];
+                }
                 
                 /// <summary>
                 /// Search for a given flag.
@@ -257,7 +324,7 @@ namespace ZIMap
                     return true;
                 }
             
-                ZIMapReceiveData data = Data;
+                ZIMapProtocol.ReceiveData data = Result;
                 if(data.Infos == null) return false;
                 items = new Item[data.Infos.Length];
                 int ilit=0;                                 // literal index
@@ -270,30 +337,46 @@ namespace ZIMap
                     ZIMapParser parser = new ZIMapParser(data.Infos[irun].Message);
                     if(parser.Length < 2 || parser[0].Text != command)
                         continue;                           // not for "FETCH"
-                    if(parser[1].Type != ZIMapParserData.List)
+                    if(parser[1].Type != ZIMapParser.TokenType.List)
                         continue;                           // server error
                     
                     ZIMapParser.Token[] tokens = parser[1].List;
                     List<string> parts = null;
-                    
+                    uint ulit = 0;
+
                     for(int itok=0; itok < tokens.Length; itok++)
                     {   ZIMapParser.Token token = tokens[itok];
                         
-                        if(token.Type == ZIMapParserData.Literal)
-                        {   if(data.Literals == null || ilit >= data.Literals.Length)
-                                Monitor(ZIMapMonitor.Error, "Fetch: literal missing: " + ilit);
+                        if(token.Type == ZIMapParser.TokenType.Literal)
+                        {   if(ulit == 0)                   // count literals
+                            {   for(int icnt=itok+1; icnt < tokens.Length; icnt++)
+                                    if(tokens[icnt].Type == ZIMapParser.TokenType.Literal) ulit++;
+                                if(ulit > 0)
+                                {   items[irun].Data = new byte[ulit+1][];
+                                    ulit = 1;
+                                }
+                                else ulit = uint.MaxValue;
+                            }
+                            if(data.Literals == null || ilit >= data.Literals.Length)
+                                MonitorError("Fetch: literal missing: " + ilit);
                             else
                             {   if(data.Literals[ilit].Length == token.Number)
-                                    items[irun].Literal = data.Literals[ilit];
+                                {   if(ulit == uint.MaxValue)
+                                        items[irun].Data = Result.Literals[ilit];
+                                    else
+                                    {   ((byte[][])items[irun].Data)[ulit-1] = Result.Literals[ilit];
+                                        ulit++;
+                                    }
+                                }
                                 else
-                                    Monitor(ZIMapMonitor.Error, "Fetch: literal invalid: " + ilit);
+                                    MonitorError("Fetch: literal invalid: " + ilit);
                                 ilit++;
                             }
                         }
                         else if(token.Text == "UID")
                         {   if(itok+1 >= tokens.Length) continue;   // server bug
                             token = tokens[itok+1];                 // should be a number
-                            if(token.Type == ZIMapParserData.Number)
+                            if(token.Type == ZIMapParser.TokenType.Number)
                             {   items[irun].UID = token.Number;
                                 itok++;
                             }
@@ -301,8 +384,8 @@ namespace ZIMap
                         else if(token.Text == "FLAGS")
                         {   if(itok+1 >= tokens.Length) continue;   // server bug
                             token = tokens[itok+1];                 // should be a list
-                            if(token.Type == ZIMapParserData.List)
-                            {   string[] flis = new string[token.List.Length];
+                            if(token.Type == ZIMapParser.TokenType.List)
+                            {   string[] flis = ZIMapConverter.StringArray(token.List.Length);
                                 items[irun].Flags = flis;
                                 int isub=0;
                                 foreach(ZIMapParser.Token flag in token.List)
@@ -313,7 +396,7 @@ namespace ZIMap
                         else if(token.Text == "RFC822.SIZE")
                         {   if(itok+1 >= tokens.Length) continue;   // server bug
                             token = tokens[itok+1];                 // should be a number
-                            if(token.Type == ZIMapParserData.Number)
+                            if(token.Type == ZIMapParser.TokenType.Number)
                             {   items[irun].Size = token.Number;
                                 itok++;
                             }
@@ -334,6 +417,12 @@ namespace ZIMap
         // List and Lsub
         // ---------------------------------------------------------------------
 
+        /// <summary>
+        /// A class that handles the LIST IMap command.
+        /// </summary>
+        /// <remarks>
+        /// The class overloads the Query() method.
+        /// </remarks>
         public class List : Generic
         {
             public struct Item
@@ -367,8 +456,8 @@ namespace ZIMap
                     ZIMapParser.Token token = parser[0];
                     string[] atts;
                     
-                    if(token.Type == ZIMapParserData.List)
-                    {   atts = new string[token.List.Length];
+                    if(token.Type == ZIMapParser.TokenType.List)
+                    {   atts = ZIMapConverter.StringArray(token.List.Length);
                         for(int itok=0; itok < token.List.Length; itok++)
                             atts[itok] = token.List[itok].Text;
                     }
@@ -394,6 +483,12 @@ namespace ZIMap
             }
         }
         
+        /// <summary>
+        /// A class that handles the LSUB IMap command.
+        /// </summary>
+        /// <remarks>
+        /// The class overloads the Query() method.
+        /// </remarks>
         public class Lsub : List
         {
             public Lsub(ZIMapFactory parent) : base(parent) {  command = "LSUB"; }
@@ -403,6 +498,12 @@ namespace ZIMap
         // Login and Logout
         // ---------------------------------------------------------------------
         
+        /// <summary>
+        /// A class that handles the LOGIN IMap command.
+        /// </summary>
+        /// <remarks>
+        /// The class overloads the Query() method.
+        /// </remarks>
         public class Login : Generic
         {   
             private string username;
@@ -427,6 +528,12 @@ namespace ZIMap
             }
         }
         
+        /// <summary>
+        /// A class that handles the LOGOUT IMap command.
+        /// </summary>
+        /// <remarks>
+        /// This command has no arguments.
+        /// </remarks>
         public class Logout : Generic
         {
             public Logout(ZIMapFactory parent) : base(parent, "LOGOUT") {}
@@ -436,6 +543,12 @@ namespace ZIMap
         // Rename
         // ---------------------------------------------------------------------
 
+        /// <summary>
+        /// A class that handles the RENAME IMap command.
+        /// </summary>
+        /// <remarks>
+        /// The class overloads the Query() method.
+        /// </remarks>
         public class Rename : Generic
         {
             public Rename(ZIMapFactory parent) : base(parent, "RENAME") {}
@@ -451,6 +564,12 @@ namespace ZIMap
         // Search
         // ---------------------------------------------------------------------
 
+        /// <summary>
+        /// A class that handles the SEARCH IMap command.
+        /// </summary>
+        /// <remarks>
+        /// The class overloads the Query() method.
+        /// </remarks>
         public class Search : Generic
         {
             public Search(ZIMapFactory parent) : base(parent, "SEARCH") {}
@@ -475,7 +594,7 @@ namespace ZIMap
                 // parse the info message ...
                 List<uint> list = new List<uint>();
                 for(int isub=0; isub < parser.Length; isub++)
-                    if(parser[isub].Type == ZIMapParserData.Number)
+                    if(parser[isub].Type == ZIMapParser.TokenType.Number)
                         list.Add(parser[isub].Number);
                 matches = list.ToArray();
                 return true;
@@ -525,7 +644,7 @@ namespace ZIMap
                     AddDirect(charset);
                 }
                 if(keys == null || keys.Length < 0)
-                {   Error(ZIMapErrorCode.InvalidArgument, "Search needs a non-empty key");
+                {   RaiseError(ZIMapException.Error.InvalidArgument, "Search needs a non-empty key");
                     return false;
                 }
 
@@ -533,7 +652,8 @@ namespace ZIMap
                 int idx = keys.IndexOf('?');
                 if(idx < 0)
                 {   if(args != null && args.Length > 0)
-                    {   Error(ZIMapErrorCode.InvalidArgument, "Search args but key without ?");
+                    {   RaiseError(ZIMapException.Error.InvalidArgument,
+                                   "Search args but key without ?");
                         return false;
                     }
                     AddDirect(keys);
@@ -543,7 +663,8 @@ namespace ZIMap
                 for(int iarg=0; ; iarg++)
                 {   if((idx == 0 && iarg == 0) ||
                        (idx >= 0 && (args == null || args.Length <= iarg)))
-                    {   Error(ZIMapErrorCode.InvalidArgument, "Search key with invalid argument: " + iarg);
+                    {   RaiseError(ZIMapException.Error.InvalidArgument,
+                                   "Search key with invalid argument: " + iarg);
                         return false;
                     }
                     if(idx > 0) AddDirect(keys.Substring(0, idx).Trim());
@@ -568,6 +689,12 @@ namespace ZIMap
         // Select and Examine 
         // ---------------------------------------------------------------------
 
+        /// <summary>
+        /// A class that handles the EXAMINE IMap command.
+        /// </summary>
+        /// <remarks>
+        /// The class overloads the Query() method.
+        /// </remarks>
         public class Examine : Select
         {
             public Examine(ZIMapFactory parent) : base(parent) 
@@ -590,10 +717,10 @@ namespace ZIMap
             {   get {   Parse();
                         if(flags == null) return null;
                         ZIMapParser parser = new ZIMapParser(flags);
-                        if(parser.Length < 1 || parser[0].Type != ZIMapParserData.List)
+                        if(parser.Length < 1 || parser[0].Type != ZIMapParser.TokenType.List)
                             return null;
                         ZIMapParser.Token[] list = parser[0].List;
-                        string[] rval = new string[list.Length];
+                        string[] rval = ZIMapConverter.StringArray(list.Length);
                         for(int irun=0; irun < list.Length; irun++)
                             rval[irun] = list[irun].Text;
                         return rval;
@@ -624,12 +751,12 @@ namespace ZIMap
                     return true;
                 }
                 
-                ZIMapReceiveData data = Data;
+                ZIMapProtocol.ReceiveData data = Result;
                 if(data.Infos == null) return false;
                 if(!IsReady) return false;
 
                 // get flags. exists and recent are special...
-                foreach(ZIMapReceiveInfo i in data.Infos)            
+                foreach(ZIMapProtocol.ReceiveInfo i in data.Infos)            
                 {   if(i.Status == "FLAGS")
                         flags = i.Message; 
                     else if(i.Message == "EXISTS")
@@ -639,11 +766,11 @@ namespace ZIMap
                 }
                 
                 // search for unseen ...
-                foreach(ZIMapReceiveInfo i in data.Infos)            
+                foreach(ZIMapProtocol.ReceiveInfo i in data.Infos)            
                 {   if(i.Status != "OK") continue;
                     ZIMapParser parser = new ZIMapParser(i.Message);
                     if(parser.Length < 1) continue;
-                    if(parser[0].Type != ZIMapParserData.Bracketed) continue;
+                    if(parser[0].Type != ZIMapParser.TokenType.Bracketed) continue;
                     
                     parser = new ZIMapParser(parser[0].Text);
                     if(parser.Length < 2) continue;
@@ -655,7 +782,7 @@ namespace ZIMap
                 
                 // get the readonly flag
                 ZIMapParser.Token access = data.Parser[0];
-                if(access.Type == ZIMapParserData.Bracketed)
+                if(access.Type == ZIMapParser.TokenType.Bracketed)
                 {   if(access.Text == "READ-ONLY")
                         readOnly = true;
                     else if(access.Text == "READ-WRITE")
@@ -677,6 +804,12 @@ namespace ZIMap
         // Status
         // ---------------------------------------------------------------------
 
+        /// <summary>
+        /// A class that handles the STATUS IMap command.
+        /// </summary>
+        /// <remarks>
+        /// The class overloads the Query() method.
+        /// </remarks>
         public class Status : MailboxBase
         {
             public Status(ZIMapFactory parent) : base(parent, "STATUS") {}
@@ -720,12 +853,12 @@ namespace ZIMap
                 if(parser == null) return false;
                 
                 // parsing ...
-                if(parser.Length > 1 && parser[1].Type == ZIMapParserData.List)
+                if(parser.Length > 1 && parser[1].Type == ZIMapParser.TokenType.List)
                 {   UpdateMailboxName(parser[0].Text);              // canonicalized name   
                     ZIMapParser.Token[] tokens = parser[1].List;    
                     for(int itok=1; itok < tokens.Length; itok++)
-                    {   if(tokens[itok-1].Type != ZIMapParserData.Text) continue;
-                        if(tokens[itok].Type != ZIMapParserData.Number) continue;
+                    {   if(tokens[itok-1].Type != ZIMapParser.TokenType.Text) continue;
+                        if(tokens[itok].Type != ZIMapParser.TokenType.Number) continue;
                         switch(tokens[itok-1].Text)
                         {   case "MESSAGES":    
                                 cntMessages = tokens[itok].Number; break;
@@ -750,6 +883,12 @@ namespace ZIMap
         // Store
         // ---------------------------------------------------------------------
 
+        /// <summary>
+        /// A class that handles the STORE IMap command.
+        /// </summary>
+        /// <remarks>
+        /// The class overloads the Query() method.
+        /// </remarks>
         public class Store : SequenceBase
         {
             public struct Item
@@ -774,7 +913,7 @@ namespace ZIMap
                     return true;
                 }
             
-                ZIMapReceiveData data = Data;
+                ZIMapProtocol.ReceiveData data = Result;
                 if(data.Infos == null) return false;
                 items = new Item[data.Infos.Length];
                 for(int irun=0; irun < items.Length; irun++)            
@@ -784,7 +923,7 @@ namespace ZIMap
                     ZIMapParser parser = new ZIMapParser(data.Infos[irun].Message);
                     if(parser.Length < 2 || parser[0].Text != "FETCH")
                         continue;                           // not for "FETCH"
-                    if(parser[1].Type != ZIMapParserData.List)
+                    if(parser[1].Type != ZIMapParser.TokenType.List)
                         continue;                           // server error
                     
                     ZIMapParser.Token[] tokens = parser[1].List;
@@ -796,7 +935,7 @@ namespace ZIMap
                         if(token.Text == "UID")
                         {   if(itok+1 >= tokens.Length) continue;   // server bug
                             token = tokens[itok+1];                 // should be a number
-                            if(token.Type == ZIMapParserData.Number)
+                            if(token.Type == ZIMapParser.TokenType.Number)
                             {   items[irun].UID = token.Number;
                                 itok++;
                             }
@@ -804,8 +943,8 @@ namespace ZIMap
                         else if(token.Text == "FLAGS")
                         {   if(itok+1 >= tokens.Length) continue;   // server bug
                             token = tokens[itok+1];                 // should be a list
-                            if(token.Type == ZIMapParserData.List)
-                            {   string[] flis = new string[token.List.Length];
+                            if(token.Type == ZIMapParser.TokenType.List)
+                            {   string[] flis = ZIMapConverter.StringArray(token.List.Length);
                                 items[irun].Flags = flis;
                                 int isub=0;
                                 foreach(ZIMapParser.Token flag in token.List)
@@ -829,6 +968,12 @@ namespace ZIMap
         // Subscribe
         // ---------------------------------------------------------------------
 
+        /// <summary>
+        /// A class that handles the SUBSCRIBE IMap command.
+        /// </summary>
+        /// <remarks>
+        /// The class overloads the Query() method.
+        /// </remarks>
         public class Subscribe : MailboxBase
         {
             public Subscribe(ZIMapFactory parent) : base(parent, "SUBSCRIBE") {}
@@ -838,6 +983,12 @@ namespace ZIMap
         // Unsubscribe
         // ---------------------------------------------------------------------
 
+        /// <summary>
+        /// A class that handles the UNSUBSCRIBE IMap command.
+        /// </summary>
+        /// <remarks>
+        /// The class overloads the Query() method.
+        /// </remarks>
         public class Unsubscribe : MailboxBase
         {
             public Unsubscribe(ZIMapFactory parent) : base(parent, "UNSUBSCRIBE") {}
@@ -847,6 +998,12 @@ namespace ZIMap
         // Namespace Command
         // =====================================================================
 
+        /// <summary>
+        /// A class that handles the NAMESPACE IMap command.
+        /// </summary>
+        /// <remarks>
+        /// This command has no arguments.
+        /// </remarks>
         public class Namespace : Generic
         {
             public Namespace(ZIMapFactory parent) : base(parent, "Namespace") {}
@@ -877,7 +1034,7 @@ namespace ZIMap
                 // we should get 3 lists ...
                 namespaces = new string[3];
                 for(int irun=0; irun < Math.Min(3, parser.Length); irun++)
-                {   if(parser[irun].Type != ZIMapParserData.List) continue;
+                {   if(parser[irun].Type != ZIMapParser.TokenType.List) continue;
                     namespaces[irun]  = parser[irun].Text;
                 }
                 return true;
@@ -892,6 +1049,12 @@ namespace ZIMap
         // DeleteACL
         // ---------------------------------------------------------------------
 
+        /// <summary>
+        /// A class that handles the DELETEACL IMap command.
+        /// </summary>
+        /// <remarks>
+        /// The class overloads the Query() method.
+        /// </remarks>
         public class DeleteACL : MailboxBase
         {
             public DeleteACL(ZIMapFactory parent) : base(parent, "DELETEACL") {}
@@ -904,7 +1067,7 @@ namespace ZIMap
             {   if(string.IsNullOrEmpty(user)) user = factory.User;
                 if(string.IsNullOrEmpty(mailboxName)) return false;
                 if(string.IsNullOrEmpty(user))
-                {   Error(ZIMapErrorCode.InvalidArgument, "Have no user name");
+                {   RaiseError(ZIMapException.Error.InvalidArgument, "Have no user name");
                     return false;
                 }
                 mboxname = mailboxName;
@@ -918,6 +1081,12 @@ namespace ZIMap
         // GetACL
         // ---------------------------------------------------------------------
 
+        /// <summary>
+        /// A class that handles the GETACL IMap command.
+        /// </summary>
+        /// <remarks>
+        /// The class overloads the Query() method.
+        /// </remarks>
         public class GetACL : MailboxBase
         {
             public struct Item
@@ -960,13 +1129,18 @@ namespace ZIMap
                 items = list.ToArray();
                 return true;
             }
-
         }
         
         // ---------------------------------------------------------------------
         // ListRights
         // ---------------------------------------------------------------------
 
+        /// <summary>
+        /// A class that handles the LISTRIGHTS IMap command.
+        /// </summary>
+        /// <remarks>
+        /// The class overloads the Query() method.
+        /// </remarks>
         public class ListRights : MailboxBase
         {
             public ListRights(ZIMapFactory parent) : base(parent, "LISTRIGHTS") {}
@@ -1006,7 +1180,7 @@ namespace ZIMap
             {   if(string.IsNullOrEmpty(user)) user = factory.User;
                 if(string.IsNullOrEmpty(mailboxName)) return false;
                 if(string.IsNullOrEmpty(user))
-                {   Error(ZIMapErrorCode.InvalidArgument, "Have no user name");
+                {   RaiseError(ZIMapException.Error.InvalidArgument, "Have no user name");
                     return false;
                 }
                 mboxname = mailboxName;
@@ -1020,6 +1194,12 @@ namespace ZIMap
         // MyRights
         // ---------------------------------------------------------------------
 
+        /// <summary>
+        /// A class that handles the MYRIGHTS IMap command.
+        /// </summary>
+        /// <remarks>
+        /// The class overloads the Query() method.
+        /// </remarks>
         public class MyRights : MailboxBase
         {
             public MyRights(ZIMapFactory parent) : base(parent, "MYRIGHTS") {}
@@ -1053,6 +1233,12 @@ namespace ZIMap
         // SetACL
         // ---------------------------------------------------------------------
 
+        /// <summary>
+        /// A class that handles the SETACL IMap command.
+        /// </summary>
+        /// <remarks>
+        /// The class overloads the Query() method.
+        /// </remarks>
         public class SetACL : MailboxBase
         {
             public SetACL(ZIMapFactory parent) : base(parent, "SETACL") {}
@@ -1066,7 +1252,7 @@ namespace ZIMap
                 if(string.IsNullOrEmpty(mailboxName)) return false;
                 if(string.IsNullOrEmpty(rights)) rights = "rwl";
                 if(string.IsNullOrEmpty(user))
-                {   Error(ZIMapErrorCode.InvalidArgument, "Have no user name");
+                {   RaiseError(ZIMapException.Error.InvalidArgument, "Have no user name");
                     return false;
                 }
                 mboxname = mailboxName;
@@ -1085,12 +1271,18 @@ namespace ZIMap
         // GetQuota
         // ---------------------------------------------------------------------
 
+        /// <summary>
+        /// A class that handles the GETQUOTA IMap command.
+        /// </summary>
+        /// <remarks>
+        /// The class overloads the Query() method.
+        /// </remarks>
         public class GetQuota : Generic
         {
             public GetQuota(ZIMapFactory parent) : base(parent, "GETQUOTA") {}
 
-            public bool Queue (string root)
-            {   if(string.IsNullOrEmpty(root)) root = "";
+            public bool Queue(string root)
+            {   if(root == null) root = "";
                 if(!AddString(root)) return false;
                 return Queue();
             }
@@ -1100,6 +1292,12 @@ namespace ZIMap
         // GetQuotaRoot
         // ---------------------------------------------------------------------
 
+        /// <summary>
+        /// A class that handles the GETQUOTAROOT IMap command.
+        /// </summary>
+        /// <remarks>
+        /// The class overloads the Query() method.
+        /// </remarks>
         public class GetQuotaRoot : MailboxBase
         {
             public GetQuotaRoot(ZIMapFactory parent) : base(parent, "GETQUOTAROOT") {}
@@ -1127,11 +1325,11 @@ namespace ZIMap
                     return base.Parse(reset);
                 }
 
-                ZIMapReceiveData data = Data;
+                ZIMapProtocol.ReceiveData data = Result;
                 if(data.Infos == null) return false;
 
                 List<Item> list = new List<Item>();
-                foreach(ZIMapReceiveInfo info in data.Infos)            
+                foreach(ZIMapProtocol.ReceiveInfo info in data.Infos)            
                 {   ZIMapParser parser = new ZIMapParser(info.Message);
                     if(parser.Length < 1) continue;         // server bug
                         
@@ -1145,16 +1343,16 @@ namespace ZIMap
                     
                     for(int irun=1; irun < parser.Length; irun++)
                     {   ZIMapParser.Token token = parser[irun];
-                        if(token.Type != ZIMapParserData.List)
-                        {   Monitor(ZIMapMonitor.Error, "Strange data: " + info);
+                        if(token.Type != ZIMapParser.TokenType.List)
+                        {   MonitorError("Strange data: " + info);
                             break;
                         }
                         ZIMapParser.Token[] triplet = token.List;
                         if(triplet.Length == 0) continue;
                         if(triplet.Length != 3 ||
-                           triplet[1].Type != ZIMapParserData.Number ||
-                           triplet[2].Type != ZIMapParserData.Number) 
-                        {   Monitor(ZIMapMonitor.Error, "Invalid data: " + info);
+                           triplet[1].Type != ZIMapParser.TokenType.Number ||
+                           triplet[2].Type != ZIMapParser.TokenType.Number) 
+                        {   MonitorError("Invalid data: " + info);
                             break;
                         }
                         
@@ -1185,12 +1383,18 @@ namespace ZIMap
         // SetQuota
         // ---------------------------------------------------------------------
 
+        /// <summary>
+        /// A class that handles the SETQUOTA IMap command.
+        /// </summary>
+        /// <remarks>
+        /// The class overloads the Query() method.
+        /// </remarks>
         public class SetQuota : Generic
         {
             public SetQuota(ZIMapFactory parent) : base(parent, "SETQUOTA") {}
  
             public bool Queue (string root, string limits)
-            {   if(string.IsNullOrEmpty(root)) root = "";
+            {   if(root == null) root = "";
                 if(!AddString(root)) return false;
                 AddList(limits);          
                 return Queue();

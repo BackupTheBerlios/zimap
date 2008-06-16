@@ -30,16 +30,38 @@ namespace ZIMap
     /// for command execution.
     /// </remarks>
     public abstract partial class ZIMapCommand : ZIMapBase, IDisposable
-    {   // our parent factory
-        protected readonly ZIMapFactory   factory;
+    {
+        //==========================================================================
+        // Enumerations    
+        //==========================================================================
+        /// <summary>
+        /// Processing status of a  <see cref="ZIMapCommand"/> object.
+        /// </summary>
+        public enum CommandState
+        {   /// <summary>Command was just created or did a Reset().</summary>
+            Created,
+            /// <summary>Command was queued but is not yet sent.</summary>
+            Queued,
+            /// <summary>Command was sent but is not yet completed.</summary>
+            Running,
+            /// <summary>Command completed but failed.</summary>
+            Failed,
+            /// <summary>Command successfully completed.</summary>
+            Completed,
+            /// <summary>The command's Dispose method has been called.</summary>
+            Disposed
+        }
+        
+        // our parent factory
+        protected readonly ZIMapFactory factory;
         // the class name for Monitor()
-        protected readonly string         name;
+        protected readonly string       name;
         // the object's state, modified at various points
-        protected ZIMapCommandState state;
+        protected CommandState          state;
         /// <summary>not internally used, see UserData property</summary>
-        protected object            userData;
+        protected object                userData;
         // prefix the command with UID
-        protected bool              uidCommand;
+        protected bool                  uidCommand;
 
         /// <summary>
         /// List of commands the can have the <c>UID</c> command prefix.
@@ -67,7 +89,7 @@ namespace ZIMap
         // the tag is set when the command is sent
         protected uint              tag;
         // data is set by ReceiveCompleted
-        ZIMapReceiveData            data;
+        ZIMapProtocol.ReceiveData   data;
         // set in Queue() routine        
         protected bool              autoDispose;
         
@@ -82,7 +104,8 @@ namespace ZIMap
                   base((ZIMapConnection)parent.Parent)
         {   name = "ZIMapCommand." + GetType().Name;
             factory = parent;
-            state = ZIMapCommandState.Created;
+            MonitorLevel = factory.MonitorLevel;
+            state = CommandState.Created;
         }
             
         // =====================================================================
@@ -94,30 +117,61 @@ namespace ZIMap
             set {   autoDispose = value; }
         }
         
-        public ZIMapCommandState CommandState 
+        public CommandState State 
         {   get {   return state; }
         }
         
-        public ZIMapReceiveData Data
+        /// <value>
+        /// This property returns the raw results of the command.
+        /// </value>
+        /// <remarks>
+        /// A call to this property will implicitly execute the command and
+        /// wait for the results.  In other words: it can be blocking.  After
+        /// the result became ready this property will instantly return the
+        /// cached value.
+        /// <para />
+        /// An error may be raised if the command cannot be executed or if
+        /// the send or receive operations failed. 
+        /// </remarks>
+        public ZIMapProtocol.ReceiveData Result
         {   get {   if(tag == 0 || tag != data.Tag)
-                    {   if(state == ZIMapCommandState.Created) Queue();
+                    {   if(state == CommandState.Created) Queue();
                         factory.ExecuteCommands(this);
                     }
                     return data;    
                 }
         }
         
-        public string CommandName 
+        /// <value>Return the IMap command name.</value>
+        public string Command 
         {   get {   return command; }
         }
 
+        /// <value>Returns <c>true</c> if some of the command arguments are literals.</value>
         public bool HasLiterals 
         {   get {   return literals != null; }
         }
 
+        /// <value>Returns <c>true</c> if the command has completed.</value>
+        /// <remarks>
+        /// A command is completed after a response was received from the server (or if
+        /// the command was aborted because it could not be sent).  A call to this 
+        /// property does not change the command state and will never block.
+        /// </remarks>
         public bool IsReady
-        {   get {   return (state == ZIMapCommandState.Completed ||
-                            state == ZIMapCommandState.Failed); }
+        {   get {   return (state == CommandState.Completed ||
+                            state == CommandState.Failed); }
+        }
+        
+        /// <value>Returns <c>true</c> if the command is queued but not yet completed.</value>
+        /// <remarks>
+        /// A command is completed after a response was received from the server (or if
+        /// the command was aborted because it could not be sent).  A call to this 
+        /// property does not change the command state and will never block.
+        /// </remarks>
+        public bool IsPending
+        {   get {   return (state == CommandState.Queued ||
+                            state == CommandState.Running); }
         }
         
         public uint Tag {
@@ -130,7 +184,7 @@ namespace ZIMap
                     {   uidCommand = false; return;
                     }
                     if(ZIMapFactory.FindInStrings(UidCommands, 0, command, false) < 0)
-                        Error(ZIMapErrorCode.InvalidArgument, "Not a UID command");
+                        RaiseError(ZIMapException.Error.InvalidArgument, "Not a UID command");
                     else
                         uidCommand = value; 
                 }
@@ -179,7 +233,7 @@ namespace ZIMap
                str = "\"\"";
             else foreach(char chr in str)
                 if((uint)chr <= 20 || (uint)chr >= 127 || chr == '"' || chr == '\\')
-                {   Error(ZIMapErrorCode.InvalidArgument, "Has invalid char");
+                {   RaiseError(ZIMapException.Error.InvalidArgument, "Has invalid char");
                     return false;
                 }
             if(args == null || args == "")  args  = str;
@@ -205,7 +259,7 @@ namespace ZIMap
         /// </remarks>
         public bool AddDirect(object arg)
         {   if(arg == null)
-            {   Error(ZIMapErrorCode.MustBeNonZero);
+            {   RaiseError(ZIMapException.Error.MustBeNonZero);
                 return false;
             }
             string argv = arg.ToString();
@@ -218,7 +272,7 @@ namespace ZIMap
         
         public bool AddSequence(uint[] items)
         {   if(items == null)
-            {   Error(ZIMapErrorCode.MustBeNonZero);
+            {   RaiseError(ZIMapException.Error.MustBeNonZero);
                 return false;
             }
             if(items.Length == 1)
@@ -283,8 +337,8 @@ namespace ZIMap
         /// </param>
         /// <param name="allowLiteral">
         /// Must be <c>true</c> to allow a literal. Otherwise the 
-        /// <see cref="Error(ZIMapErrorCode)"/> function will be called to throw
-        /// an exception if a literal is required.
+        /// <see cref="RaiseError(ZIMapException.Error)"/> function will be called
+        /// to throw an exception if a literal is required due to 8-bit data.
         /// </param>
         /// <returns>
         /// true on success
@@ -306,7 +360,7 @@ namespace ZIMap
             {   arg = argument.ToString();
                 if(!ZIMapConverter.Check7BitText(arg))
                 {   if(!allowLiteral)
-                    {   Error(ZIMapErrorCode.InvalidArgument, "Has 8bit char");
+                    {   RaiseError(ZIMapException.Error.InvalidArgument, "Has 8bit char");
                         return false;
                     }
                     return AddLiteral(arg);
@@ -361,7 +415,7 @@ namespace ZIMap
         public bool AddEndList(uint level)
         {   if(listLevel == 0) return true;
             if(level > listLevel)
-            {   Error(ZIMapErrorCode.InvalidArgument, level.ToString());
+            {   RaiseError(ZIMapException.Error.InvalidArgument, level.ToString());
                 return false;
             }
             if(level > 0) level--;
@@ -429,27 +483,57 @@ namespace ZIMap
             return AddString(encodedName);
         }
         
+        /// <summary>
+        /// Adds a List argument to a command.
+        /// </summary>
+        /// <param name="list">
+        /// A string containing words that become the list content.
+        /// Braces are not required and will be removed.
+        /// </param>
+        /// <returns>
+        /// Returns <c>true</c> on success.
+        /// </returns>
+        /// <remarks>
+        /// For a <c>null</c> argument an empty list is added.  The argument
+        /// is split into an array using the space character as delimiter.
+        /// The string array is passed to <see cref="AddList(string[])"/>.
+        /// This routine does not know about quoting and can be used only
+        /// for simple cases.
+        /// </remarks>        
         public bool AddList(string list)
-        {   if(list == null) list = "";
-            if(list.StartsWith("("))
-            {   if(!list.EndsWith(")"))
-                {   Error(ZIMapErrorCode.InvalidArgument, "Bad use of ()");
+        {   if(string.IsNullOrEmpty(list))          // empty list
+                return AddDirect("()");
+            if(list[0] == '(')                      // remove brackets
+            {   if(list[list.Length-1] != ')')
+                {   RaiseError(ZIMapException.Error.InvalidArgument, "Bad use of ()");
                     return false;
                 }
                 list = list.Substring(1, list.Length-2);
             }
-            string[] arr = list.Split(" ".ToCharArray());
-            return AddList(arr);
+            return AddList(ZIMapConverter.StringArray(list));
         }
 
+        /// <summary>
+        /// Adds a List argument to a command.
+        /// </summary>
+        /// <param name="list">
+        /// Contains an array of list elements - can be <c>null</c> or empty.
+        /// </param>
+        /// <returns>
+        /// Returns <c>true</c> on success.
+        /// </returns>
+        /// <remarks>
+        /// Elements of the input array that are <c>null</c> or empty are 
+        /// ignored.  The routine generates an empty list when the input array is
+        /// <c>null</c> or contains no non-empty elements.  The array elements
+        /// themselves are not parsed,  they are passed to <see cref="AddDirect"/>. 
+        /// </remarks>        
         public bool AddList(string[] list)
         {   int iBeg = 0;
             int iEnd = (list == null) ? 0 : list.Length;
             uint level = AddBeginList();
             for(; iBeg < iEnd; iBeg++)
-            {   if(list[iBeg] == "") continue;
-                AddDirect(list[iBeg]);
-            }
+                if(!string.IsNullOrEmpty(list[iBeg])) AddDirect(list[iBeg]);
             return AddEndList(level);
         }
         
@@ -467,13 +551,12 @@ namespace ZIMap
         /// </returns>
         /// <remarks>
         /// Call this method to release resources. 
-        /// Throws an <see cref="ZIMapErrorCode.CommandBusy"/> error if
+        /// Throws an <see cref="ZIMapException.Error.CommandBusy"/> error if
         /// the command is currently executing.
         /// </remarks>
         public virtual bool Reset()
-        {   if(state == ZIMapCommandState.Queued ||
-               state == ZIMapCommandState.Running)
-            {   Error(ZIMapErrorCode.CommandBusy, command);
+        {   if(state == CommandState.Queued || state == CommandState.Running)
+            {   RaiseError(ZIMapException.Error.CommandBusy, command);
                 return false;
             }
 
@@ -481,34 +564,64 @@ namespace ZIMap
             literals = null;
             userData = null;
             data.Reset();
-            state = ZIMapCommandState.Created;
+            state = CommandState.Created;
             return true;
         }
         
+        /// <summary>
+        /// Send the command to the server and optionally wait for the response.
+        /// </summary>
+        /// <param name="wait">
+        /// When <c>false</c> the function will only sent the command but will not
+        /// wait for the response.  <c>true</c> will sent the command and will wait.
+        /// </param>
+        /// <returns>
+        /// Returns <c>false</c> if send or receive failed.  The status does not depend on
+        /// the command's success or failure, see <see cref="ZIMapProtocol.ReceiveState"/>.
+        /// </returns>
+        /// <remarks>
+        /// It does no harm to call this function on a command that has already been sent.
+        /// But it the command has been completed or if <see cref="Queue"/> has not been
+        /// call a <see cref="ZIMapException.Error.CommandState"/> error will be raised.
+        /// </remarks>
         public bool Execute(bool wait)
-        {   Monitor(ZIMapMonitor.Info, "Execute: " + name);
-            
-            if(state == ZIMapCommandState.Disposed)
-            {   Error(ZIMapErrorCode.DisposedObject, name);
+        {   // get protocol layer
+            ZIMapProtocol prot = ((ZIMapConnection)Parent).ProtocolLayer;
+            if (prot == null)                        // should not happen!
+            {   RaiseError(ZIMapException.Error.DisposedObject);
                 return false;
             }
-            if(state != ZIMapCommandState.Created &&
-               state != ZIMapCommandState.Queued)
-            {   Error(ZIMapErrorCode.CommandState, command);
+
+            // the command has already been sent ...
+            if(state == CommandState.Running)
+            {   MonitorDebug("Execute: {0:x} is running", tag);
+                if(wait) factory.ExecuteCommands(this);
+                return true;
+            }
+
+            // will send command or raise an error ...
+            if(literals == null)
+                MonitorDebug("Execute: {0:x}", prot.SendCount+1);
+            else
+                MonitorDebug("Execute: {0:x}, {1} literals", 
+                             prot.SendCount+1, literals.Count);
+            
+            if(state == CommandState.Disposed)
+            {   RaiseError(ZIMapException.Error.DisposedObject, name);
+                return false;
+            }
+            if(state != CommandState.Created &&
+               state != CommandState.Queued)
+            {   RaiseError(ZIMapException.Error.CommandState, command);
                 return false;
             }
 
             // we do not catch exceptions, assume error ...
-            state = ZIMapCommandState.Failed;
+            state = CommandState.Failed;
             AddEndList(0);                          // implicitly close lists
-            // now try ...
-            
-            ZIMapProtocol prot = ((ZIMapConnection)Parent).ProtocolLayer;
-            if(prot == null)                        // should not happen!
-            {   Error(ZIMapErrorCode.DisposedObject);
-                return false;
-            }
 
+            // now try ...
+            string error = "send failed";
             if(literals == null)
             {   StringBuilder sb = new StringBuilder();
                 if(uidCommand) sb.Append("UID ");
@@ -522,56 +635,113 @@ namespace ZIMap
             else
             {   if(uidCommand) literals.Insert(0, "UID");   
                 if(args != "") literals.Add(args);   
-                tag = prot.Send(literals.ToArray());
+                tag = prot.Send(literals.ToArray(), out error);
                 literals = null;
             }
             args = null;
             
             // did it work? We don't get here after an exception
             if(tag == 0) 
-            {   Monitor(ZIMapMonitor.Error, "Excecute: send failed");
+            {   MonitorError("Excecute: error: " + error);
+                data.Message = error;
                 return false;
             }
-            state = ZIMapCommandState.Running;
+            state = CommandState.Running;
             if(!wait) return true;
-            return factory.ExecuteCommands(this);   // wait for result
+            return factory.ExecuteCommands(this);
         }
             
         public bool Queue()
-        {   Monitor(ZIMapMonitor.Debug, "Queue");
-            if(state == ZIMapCommandState.Disposed)
-            {   Error(ZIMapErrorCode.DisposedObject, base.GetType());
+        {   MonitorDebug("Queue");
+            if(state == CommandState.Disposed)
+            {   RaiseError(ZIMapException.Error.DisposedObject, base.GetType());
                 return false;
             }
-            if(state != ZIMapCommandState.Created)
-            {   Error(ZIMapErrorCode.CommandBusy, command);
+            if(state != CommandState.Created)
+            {   RaiseError(ZIMapException.Error.CommandBusy, command);
                 return false;
             }
 
             autoDispose = true;
-            state = ZIMapCommandState.Queued;
+            state = CommandState.Queued;
             return factory.QueueCommand(this);      // make it the most recent
         }
 
-        public bool ReceiveCompleted(ZIMapReceiveData rdata)
-        {   if(state != ZIMapCommandState.Running)
-            {   Error(ZIMapErrorCode.CommandState, state);
+        /// <summary>
+        /// Marks a command as completed and stores the server response.
+        /// </summary>
+        /// <param name="rdata">
+        /// The <see cref="ZIMapProtocol.ReceiveData"/> value returned from 
+        /// <see cref="ZIMapProtocol.Receive"/>
+        /// </param>
+        /// <returns>
+        /// A <see cref="System.Boolean"/>
+        /// </returns>
+        public bool Completed(ZIMapProtocol.ReceiveData rdata)
+        {   if(state != CommandState.Running)
+            {   RaiseError(ZIMapException.Error.CommandState, state);
                 return false;
             }
             if(tag != rdata.Tag)
-            {   Error(ZIMapErrorCode.InvalidArgument, "Unexpected tag");
+            {   RaiseError(ZIMapException.Error.InvalidArgument, "Unexpected tag");
                 return false;
             }
                 
-            state = (rdata.ReceiveState == ZIMapReceiveState.Ready)
-                  ? ZIMapCommandState.Completed : ZIMapCommandState.Failed;
-            Monitor(ZIMapMonitor.Info, "ReceiveCompleted: " + tag + "  state: " + state);
             data = rdata;
-            if(MonitorLevel <= ZIMapMonitor.Debug)              // expensive ...
-                Monitor(ZIMapMonitor.Debug, data.ToString());
+            state = (data.State == ZIMapProtocol.ReceiveState.Ready)
+                  ? CommandState.Completed : CommandState.Failed;
+            MonitorDebug( "Completed: Tag: {0:x}  Status: {1} ({2})", tag, data.Status, state);
+#if DEBUG            
+            if(MonitorLevel <= ZIMapConnection.Monitor.Debug)   // expensive ...
+                foreach(string line in data.ToString().Split("\n".ToCharArray()))               
+                    MonitorDebug("           {0}", line);
+#endif
             ZIMapConnection.Callback.Result(factory.Connection, this);
-
             return true;
+        }
+
+        /// <summary>
+        /// Conveniency routine to check if a command succeeded.
+        /// </summary>
+        /// <returns>
+        /// When the command succeeded <c>true</c> is returned.
+        /// </returns>
+        /// <remarks>
+        /// The function will execute the command as required and wait for the
+        /// result. The function internally calls <see cref="CheckSuccess(string)"/>.
+        /// </remarks>
+        public bool CheckSuccess()
+        {   return CheckSuccess(null);
+        }
+
+        /// <summary>
+        /// Conveniency routine to check if a command succeeded.
+        /// </summary>
+        /// <param name="errorMessage">
+        /// An optional error message or <c>null</c>. An empty string or
+        /// just ":" output a default message.
+        /// </param>
+        /// <returns>
+        /// When the command succeeded <c>true</c> is returned.
+        /// </returns>
+        /// <remarks>
+        /// The function will execute the command as required and wait for
+        /// the result.  When the command status indicates an error and
+        /// on error message was passed this message will be output via
+        /// <see cref="MonitorError(string)"/>.  The function internally
+        /// calls <see cref="Result"/> and 
+        /// <see cref="ZIMapProtocol.ReceiveData.Succeeded"/>.
+        /// </remarks>
+        public bool CheckSuccess(string errorMessage)
+        {
+            if(Result.Succeeded)     return true;           // ok, it worked
+            if(errorMessage == null) return false;          // be silent
+            if(errorMessage == "" || errorMessage == ":")
+                MonitorError("{0}{1} command failed: {2}", 
+                             errorMessage, command, Result.Message);
+            else
+                MonitorError(errorMessage);
+            return false;
         }
 
         /// <summary>
@@ -592,8 +762,8 @@ namespace ZIMap
 
         public ZIMapParser InfoParser(string filter, ref uint index)
         {   // return null if something went wrong ...
-            ZIMapReceiveInfo[] infos;
-            ZIMapReceiveData data = Data;
+            ZIMapProtocol.ReceiveInfo[] infos;
+            ZIMapProtocol.ReceiveData data = Result;
             if(!data.Succeeded || data.Infos == null)
             {   index = uint.MaxValue;                          // set error indicator
                 return null;
@@ -633,13 +803,12 @@ namespace ZIMap
         public override string ToString ()
         {
             StringBuilder sb = new StringBuilder();
-            sb.AppendFormat("Command: CommandName={0}  CommandState={1}",
-                            CommandName, CommandState);
+            sb.AppendFormat("Command: CommandName={0}  State={1}", command, State);
             if(IsReady) sb.AppendFormat("\n" +
-                            "         ReceiveState={0}  Tag={1}\n" +
+                            "         Status={0}  Tag={1}\n" +
                             "         Result: {2}", data.Status, Tag, data.Message);
             if(data.Infos != null)
-                foreach(ZIMapReceiveInfo info in data.Infos)
+                foreach(ZIMapProtocol.ReceiveInfo info in data.Infos)
                     sb.AppendFormat("\n         Info: {0}", info);
             if(IsReady) ToString(sb);
             return sb.ToString();
@@ -682,9 +851,9 @@ namespace ZIMap
             }
            
             // must implement, abstract in base ...
-            protected override void Monitor(ZIMapMonitor level, string message)
+            protected override void MonitorInvoke(ZIMapConnection.Monitor level, string message)
             {   if(factory.MonitorLevel <= level)
-                    ZIMapConnection.Monitor(Parent, name, level, message); 
+                    ZIMapConnection.MonitorInvoke(Parent, name, level, message); 
             }
 
             /// <summary>
@@ -695,8 +864,8 @@ namespace ZIMap
             /// not cancel a queued command nor detach it from it's factory.
             /// </remarks>
             public override void Dispose()
-            {   if(state == ZIMapCommandState.Disposed) return;
-                state = ZIMapCommandState.Disposed;
+            {   if(state == CommandState.Disposed) return;
+                state = CommandState.Disposed;
 
                 // Tell the factory to cancel/remove the command ...
                 factory.DetachCommand(this);
@@ -707,7 +876,7 @@ namespace ZIMap
                 
                 // Free resources (must set Disposed again)
                 Reset();
-                state = ZIMapCommandState.Disposed;
+                state = CommandState.Disposed;
             }
         
             /// <summary>
@@ -755,7 +924,7 @@ namespace ZIMap
             /// </returns>
             /// <remarks>
             /// Call this method to release resources. 
-            /// Throws an <see cref="ZIMapErrorCode.CommandBusy"/> error if
+            /// Throws an <see cref="ZIMapException.Error.CommandBusy"/> error if
             /// the command is currently executing.
             /// <para />
             /// For implementors: this routine calls Parse(true), a derived class
@@ -870,7 +1039,10 @@ namespace ZIMap
             /// Operate on a single mail
             /// </summary>
             /// <param name="index">
-            /// Mail index
+            /// Mail item ID (or UID see the <see cref="UidCommand"/> property).
+            /// </param>
+            /// <param name="what">
+            /// Command parameters in IMap syntax.
             /// </param>
             /// <remarks>This functions just calls <c>Queue(index, uint.MaxValue, what)</c>.
             /// </remarks>
@@ -887,7 +1059,10 @@ namespace ZIMap
             /// <param name="lastIndex">
             /// Final index, can be <c>uint.MaxValue</c> for no limit.
             /// </param>
-            /// <remarks>Use <c>Queue(0, uint.MaxValue, what)</c> to select all
+            /// <param name="what">
+            /// Command parameters in IMap syntax.
+            /// </param>
+            /// <remarks>Use <c>Queue(1, uint.MaxValue, what)</c> to select all
             /// items.
             /// </remarks>
             public bool Queue(uint firstIndex, uint lastIndex, string what)
@@ -907,7 +1082,10 @@ namespace ZIMap
             /// Operate on a list of mails
             /// </summary>
             /// <param name="items">
-            /// An array of mail UIDs or IDs.
+            /// An array of mail UIDs or IDs (see the <see cref="UidCommand"/> property).
+            /// </param>
+            /// <param name="what">
+            /// Command parameters in IMap syntax.
             /// </param>
             public bool Queue(uint [] items, string what)
             {   AddSequence(items);

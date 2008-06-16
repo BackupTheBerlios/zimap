@@ -41,8 +41,9 @@ namespace ZIMap
             }
             
             // must implement, abstract in base ...
-            protected override void Monitor(ZIMapMonitor level, string message)
-            {   if(MonitorLevel <= level) ZIMapConnection.Monitor(Parent, name, level, message); 
+            protected override void MonitorInvoke(Monitor level, string message)
+            {   if(MonitorLevel <= level) 
+                    ZIMapConnection.MonitorInvoke(Parent, name, level, message); 
             }
         }
 
@@ -108,7 +109,7 @@ namespace ZIMap
             // numeric value given?
             uint prot;
             if(uint.TryParse(protocolName, out prot)) return prot;
-            ZIMapException.Throw(null, ZIMapErrorCode.UnknownProtocol, protocolName);
+            ZIMapException.Throw(null, ZIMapException.Error.UnknownProtocol, protocolName);
             return 0;                                  
         }
             
@@ -139,9 +140,9 @@ namespace ZIMap
             }
             catch(Exception inner)
             {   if(inner is System.Net.Sockets.SocketException)
-                    conn.Monitor(ZIMapMonitor.Error, "GetConnection: " + inner.Message);
+                    conn.MonitorError("GetConnection: " + inner.Message);
                 else
-                    conn.Error(ZIMapErrorCode.CannotConnect, inner.Message);
+                    conn.RaiseError(ZIMapException.Error.CannotConnect, inner.Message);
                 return null;
             }
 
@@ -161,7 +162,7 @@ namespace ZIMap
             if (stream == null)
                 return true;
             try
-            {   Monitor(ZIMapMonitor.Info, "Closing connection");
+            {   MonitorInfo( "Closing connection");
                 
                 transport.Close();
                 transport = null;
@@ -173,7 +174,7 @@ namespace ZIMap
                 return true;
             }
             catch(Exception inner)
-            {   Error(ZIMapErrorCode.CloseFailed, inner);
+            {   RaiseError(ZIMapException.Error.CloseFailed, inner);
             }
             return false;
         }
@@ -245,7 +246,8 @@ namespace ZIMap
                 }
             set {   if(tlsmode == value) return;
                     if(tlsmode == TlsModeEnum.IMaps || value == TlsModeEnum.IMaps)
-                    {   Error(ZIMapErrorCode.InvalidArgument, "Cannot change to/from IMaps");
+                    {   RaiseError(ZIMapException.Error.InvalidArgument,
+                                   "Cannot change to/from IMaps");
                         return;
                     }
                     tlsmode = value;
@@ -275,12 +277,12 @@ namespace ZIMap
         public bool StartTls(uint uTag)
         {
             if(uTag == 0)
-                Monitor(ZIMapMonitor.Info, "StartTls: using TLS via imaps");
+                MonitorInfo( "StartTls: TLS via imaps");
             else
             {   if (tlsmode == TlsModeEnum.Disabled || tlsmode == TlsModeEnum.IMaps)
                     return true;                    // nothing to do
 
-                Monitor(ZIMapMonitor.Info, "StartTls: sending STARTLS");
+                MonitorInfo( "StartTls: send STARTLS");
                 transport.Send(uTag, "STARTTLS");
                 string tag, status, message;
                 while (true)
@@ -289,11 +291,11 @@ namespace ZIMap
                 }
                 if (status != "OK")
                 {   if (tlsmode == TlsModeEnum.Required)
-                    {   Error(ZIMapErrorCode.CannotConnect,
-                          "STARTTLS failed: " + message);
+                    {   RaiseError(ZIMapException.Error.CannotConnect,
+                                   "STARTTLS failed: " + message);
                         return false;               // required but not ready
                     }
-                    Monitor(ZIMapMonitor.Info, "STARTTLS failed: " + message);
+                    MonitorInfo( "StartTls: STARTTLS failed: " + message);
                     tlsmode = TlsModeEnum.Disabled;
                     return true;
                 }
@@ -309,11 +311,11 @@ namespace ZIMap
             }
             catch(Exception ex)
             {   if(tlsmode == TlsModeEnum.Required)
-                {   Error(ZIMapErrorCode.CannotConnect, ex.Message);
+                {   RaiseError(ZIMapException.Error.CannotConnect, ex.Message);
                     return false;                   // required but not ready
                 }
                 if(ex is ZIMapException) throw ex;
-                Monitor(ZIMapMonitor.Error, "TLS failure: " + ex.Message);
+                MonitorError("TLS failure: " + ex.Message);
                 return false;
             }
 
@@ -349,7 +351,7 @@ namespace ZIMap
                 return sssl;
             }
 #endif
-            Error(ZIMapErrorCode.CannotConnect, "No TLS support available: " + server);
+            RaiseError(ZIMapException.Error.CannotConnect, "No TLS support available: " + server);
             return null;
         }
 
@@ -361,9 +363,9 @@ namespace ZIMap
         {
             if(certificateErrors == null || certificateErrors.Length <= 0) return true;
             for(int irun=0; irun < certificateErrors.Length; irun++)
-                Monitor(ZIMapMonitor.Info,
+                MonitorInfo(
                     string.Format("Server certificate error {0:X}", certificateErrors[irun]));
-            Monitor(ZIMapMonitor.Error, "Server certificate is invalid. Error ignored!"); 
+            MonitorError("Server certificate is invalid. Error ignored!"); 
             return true;
         }
 #elif MS_BUILD
@@ -374,7 +376,7 @@ namespace ZIMap
         {
             if (sslPolicyErrors == System.Net.Security.SslPolicyErrors.None) return true;
             if (tlsmode == TlsModeEnum.Required) return false;
-            Monitor(ZIMapMonitor.Error, "Server certificate is invalid. Error ignored!");
+            MonitorError("Server certificate is invalid. Error ignored!");
             return true;
         }
 #endif
@@ -392,8 +394,9 @@ namespace ZIMap
             }
             
             // must implement, abstract in base ...
-            protected override void Monitor(ZIMapMonitor level, string message)
-            {   if(MonitorLevel <= level) ZIMapConnection.Monitor(Parent, name, level, message); 
+            protected override void MonitorInvoke(ZIMapConnection.Monitor level, string message)
+            {   if(MonitorLevel <= level)
+                    ZIMapConnection.MonitorInvoke(Parent, name, level, message); 
             }
         }
 
@@ -427,8 +430,9 @@ namespace ZIMap
             }
             
             // must implement, abstract in base ...
-            protected override void Monitor(ZIMapMonitor level, string message)
-            {   if(MonitorLevel <= level) ZIMapConnection.Monitor(Parent, name, level, message); 
+            protected override void MonitorInvoke(ZIMapConnection.Monitor level, string message)
+            {   if(MonitorLevel <= level)
+                    ZIMapConnection.MonitorInvoke(Parent, name, level, message); 
             }
         }
       
@@ -450,49 +454,101 @@ namespace ZIMap
                     return factory;    
                 }
         }
+        
+        /// <summary>
+        /// Return the <see cref="ZIMapFactory"/> object that was created by
+        /// a call to <see cref="CommandLayer"/>.
+        /// </summary>
+        /// <returns>
+        /// Returns <c>null</c> if <see cref="CommandLayer"/> was never used to
+        /// reate a factory.
+        /// </returns>      
+        /// <remarks>
+        /// This method is a convenient way to detect if an application uses
+        /// the command layer.
+        /// </remarks>
+        public ZIMapFactory GetFactoryInUse()
+        {   return factory;
+        }
+        
 #endregion
 
-#region Debug Support
+#region Monitoring Support
         // =====================================================================
-        // Debug support 
+        // Support for Debug and Monitoring 
         // =====================================================================
+
+        /// <summary>
+        /// Indicates the type of information passed to a Monitor() function.
+        /// </summary>
+        public enum Monitor
+        {   /// <summary>Debug information is sent.</summary>
+            Debug,
+            /// <summary>Something that may be of interest is reported.</summary>
+            Info,
+            /// <summary>An error is reported.</summary>
+            Error,
+            /// <summary>
+            /// Used to indicate progress (text arg must contain 0 ... 100).
+            /// </summary>
+            Progress,
+            /// <summary>
+            /// Used to indicate an EXISTS server response, e.g. thats the number of
+            /// messages in a mailbox has changed (text arg must contain 0 ... 100).
+            /// </summary>
+            Messages
+        }
 
         static private string MonitorProgress;
         
-        public static void Monitor(ZIMapConnection origin, string name, ZIMapMonitor level, string message)
+        public static void MonitorInvoke(ZIMapConnection origin, string name,
+                                         Monitor level, string message)
         {   if(message == null) message = "<null>";
-            if(level == ZIMapMonitor.Progress)
+            if(level == Monitor.Progress)
             {   if(message == MonitorProgress) return;
                 MonitorProgress = message;
             }
-            else if(level != ZIMapMonitor.Messages)
+            else if(level != Monitor.Messages)
                 MonitorProgress = null;
 
             if(name == null) name = "<null>";
+            
+            // must use locking to make this thread safe (see ZIMapTransport.Reader) ...
             try
             {   if(origin != null) System.Threading.Monitor.Enter(origin);
-                if(ZIMapConnection.Callback.Monitor(origin, level, name + ": " + message))
-                    return;
                 
-                if(level == ZIMapMonitor.Progress)
-                {   if(origin == null || origin.MonitorLevel > ZIMapMonitor.Info) return;
-                    Console.Write("{0} {1}: {2}\r", name, level.ToString(), message);
+                if(level == Monitor.Progress)
+                {   uint percent;
+                    if(uint.TryParse(message, out percent) &&
+                       ZIMapConnection.Callback.Progress(origin, percent))
+                            return;
+                    Console.Write("{0} {1}: {2}\r", name, level, message);
                 }
-                else if(level != ZIMapMonitor.Messages)
-                    Console.WriteLine("{0} {1}: {2}", name, level.ToString(), message);
+                else if(level == Monitor.Messages)
+                {   uint existing;
+                    if(!uint.TryParse(message, out existing)) return;
+                    ZIMapConnection.Callback.Message(origin, existing);
+                }
+                else
+                {   if(ZIMapConnection.Callback.Monitor(origin, level, name, message))
+                        return;
+                    Console.WriteLine("{0} {1}: {2}", name, level, message);
+                }
             }
             finally
             {   if(origin != null) System.Threading.Monitor.Exit(origin);
             }
         }
 
-        public static void Monitor(ZIMapBase origin, string name, ZIMapMonitor level, string message)
+        public static void MonitorInvoke(ZIMapBase origin, string name, 
+                                         Monitor level, string message)
         {   ZIMapConnection conn = (origin == null) ? null : origin.Parent as ZIMapConnection;
-            Monitor(conn, name, level, message);
+            MonitorInvoke(conn, name, level, message);
         }
             
-        protected override void Monitor(ZIMapMonitor level, string message)
-        {   if(this.MonitorLevel <= level) Monitor(this, "ZIMapConnection", level, message);
+        protected override void MonitorInvoke(Monitor level, string message)
+        {   if(this.MonitorLevel > level) return; 
+            MonitorInvoke(this, "ZIMapConnection", level, message);
         }
 #endregion
 
@@ -506,7 +562,13 @@ namespace ZIMap
         /// </summary>
         public interface ICallback
         {   /// <summary>Provides Error, Debug and Progress information</summary>
-            bool Monitor(ZIMapConnection connection, ZIMapMonitor level, string message);
+            bool Monitor(ZIMapConnection connection, ZIMapConnection.Monitor level,
+                         string source, string message);
+            /// <summary>Used by the <see cref="ZIMapConnection.Progress"/> class to
+            ///          report progress</summary>
+            bool Progress(ZIMapConnection connection, uint percent);
+            /// <summary>Called when an EXISING untagged message was received</summary>
+            bool Message(ZIMapConnection connection, uint existing);
             /// <summary>Called when the IMap connection got closed</summary>
             bool Closed(ZIMapConnection connection);
             /// <summary>The protocol layer calls this before sending an IMap command</summary>
@@ -521,7 +583,12 @@ namespace ZIMap
         /// A NOOP implementation of ICallback, can be used as a base class
         /// </summary>
         public class CallbackDummy : ZIMapConnection.ICallback
-        {   public virtual bool Monitor(ZIMapConnection connection, ZIMapMonitor level, string message)
+        {   public virtual bool Monitor(ZIMapConnection connection, ZIMapConnection.Monitor level,
+                                        string source, string message)
+            {   return false;   }
+            public virtual bool Progress(ZIMapConnection connection, uint percent)
+            {   return false;   }
+            public virtual bool Message(ZIMapConnection connection, uint existing)
             {   return false;   }
             public virtual bool Closed(ZIMapConnection connection)
             {   return false;   }
@@ -549,5 +616,231 @@ namespace ZIMap
                 }
         }
 #endregion
+
+#region Progress Reporting
+        // =====================================================================
+        // Progress reporting
+        // =====================================================================
+        /// <summary>
+        /// Update the progress display even before having a <see cref="ZIMapConnection"/>
+        /// instance.
+        /// </summary>
+        /// <param name="connection">
+        /// Should be the current connection but can also be <c>null</c> if no connection
+        /// has been created until the time of the call.
+        /// </param>
+        /// <param name="percent">
+        /// The progress value <see cref="ZIMapConnection.Progress.Update(uint)"/>.
+        /// </param>
+        /// <remarks>
+        /// This wrapper is efficient and can be used by library routines as a standard
+        /// call to update the progress display.  Another way for applications is to use
+        /// the <see cref="ProgressReporting"/> protperty to obtain a reference to an
+        /// instance of the <see cref="ZIMapConnection.Progress"/> class that offers more
+        /// features.
+        /// </remarks>
+        public static void ProgressUpdate(ZIMapConnection connection, uint percent)
+        {   if(connection == null)
+            {   if(percent > 100) percent = 100;
+                MonitorInvoke(null, "ZIMapConnection", Monitor.Progress, percent.ToString());
+            }
+            else if(connection.progress != null)
+                connection.progress.Update(percent);
+            else
+                connection.ProgressReporting.Update(percent);
+        }
+
+        // keep one Progress instance alife
+        private ZIMapConnection.Progress   progress;
+
+        /// <summary>
+        /// Obtain a cached instance of <see cref="ZIMapConnection.Progress"/> that can
+        /// be used for progress reporting. 
+        /// </summary>
+        public ZIMapConnection.Progress ProgressReporting
+        {   get {   if(progress == null) progress = new Progress(this);
+                    return progress;
+                }
+        }
+
+        /// <summary>
+        /// Provides support for progress reporting.
+        /// </summary>
+        /// <remarks>
+        /// Progress is measured as a percent value ranging from <c>0</c> to <c>100</c>.
+        /// The <see cref="Update(uint)"/> method is used to signal a progress change.
+        /// <para />
+        /// An important feature of this class is that progress reports can be nested:
+        /// Some worker routine that reports progress ranging from <c>0</c> to <c>100</c>
+        /// might have a caller that later calls other worker that also reports progress
+        /// in this way.  The solution to this problem is scaling - the method 
+        /// <see cref="Push"/> is called before running a worker with parameters that,
+        /// for example scale the progress reported by that worker to an absolute range
+        /// of <c>0</c> to <c>40</c>.  After the worker has returned <see cref="Pop"/>
+        /// is called to remove scaling, and before the last worker is called Push is
+        /// used again to set an absolute scaling of <c>40</c> to <c>100</c>. Scalings
+        /// can be nested to any level.
+        /// </remarks>
+        public class Progress
+        {
+            private ZIMapConnection connection;
+            private uint percent;
+            
+            public Progress(ZIMapConnection parent)
+            {   connection = parent;
+                min = 0; max = 100;
+            }
+
+            /// <summary>
+            /// This field can be used to disable progress reporting.
+            /// </summary>
+            public static bool Enabled = true;
+            
+            private uint            min, max;
+            private uint            level;
+            private Progress        chain;
+                
+            /// <value>
+            /// Get/Set the current progress percentage.
+            /// </value>
+            /// <remarks>
+            /// The set property does not call <see cref="Update(uint)"/>, e.g. a change
+            /// will not become immedeately visible.
+            /// </remarks>
+            public uint Percent
+            {   get {   return percent; }
+                set {   percent = value; }
+            }
+
+            public void Update(uint current, uint maximum)
+            {   if(!Enabled || maximum == 0) return;
+                Update((double)current / maximum);
+            }
+            
+            public void Update(double fraction)
+            {   if(!Enabled) return;
+                if     (fraction <= 0.0) Update(0);
+                else if(fraction >= 1.0) Update(99);
+                else                     Update((uint)(100*fraction));
+            }
+
+            /// <summary>
+            /// Start or Update the progress display
+            /// </summary>
+            /// <param name="percent">
+            /// Indicates the current progress, where <c>0</c> is a special value.
+            /// </param> 
+            /// <remarks>
+            /// This routine does several optimizations to avoid redundant calls
+            /// to the consumer that performs the real output on a display.  The
+            /// most important thing is that progress can only advance - subsequent
+            /// calls with a smaller percentage are ignored.  An exception to this
+            /// is the value <c>0</c> which resets the progress to start again.
+            /// <para/>
+            /// The maximum value is <c>99</c>, all values above will be treated
+            /// as if <c>99</c> were passed as an argument.  Use <see cref="Done"/>
+            /// if you want to indicate that an action has completed.
+            /// </remarks>
+            public void Update(uint percent)
+            {   if(!Enabled) return;
+                if(percent > 99) percent = 99;
+                if(percent <= this.percent && percent > 0) return;
+                this.percent = percent;
+                uint udif = max - min;
+                if(udif < 100)
+                {   if(udif == 0) return;
+                    percent = (udif * percent) / 100 + min;
+                }
+                MonitorInvoke(percent.ToString());
+            }
+
+            /// <summary>
+            /// Indicate that an action is complete.
+            /// </summary>
+            /// <remarks>
+            /// If the value of <see cref="Percent"/> is greater <c>0</c>
+            /// this routine will pass a value of <c>100</c> to the consumer
+            /// and reset the percent value to zero.
+            /// <para/>
+            /// The call is ignored if scaling is in place, e.g. it usually
+            /// only has effect on the top level (see <see cref="Push"/>).
+            /// </remarks>
+            public void Done()
+            {   if(!Enabled || percent == 0) return;
+                if((max - min) < 100)        return;
+                MonitorInvoke("100");
+                percent = 0;
+            }
+
+            /// <summary>
+            /// Discard all scaling levels and go back to the initial state.
+            /// </summary>
+            /// <remarks>
+            /// If the value of <see cref="Percent"/> is greater <c>0</c>
+            /// this routine will pass a value of <c>100</c> to the consumer.
+            /// </remarks>
+            public void Reset()
+            {   if(!Enabled) return;
+                if(percent != 0) MonitorInvoke("100");
+                chain = null;
+                level = 0;
+                min   = 0;
+                max   = 100;
+                percent = 0;
+            }
+            
+            public uint Push(uint min, uint max)
+            {   if(min > 100) min = 100;
+                if(max > 100) max = 100;
+                if(max < min) max = min;
+
+                uint udif = this.max - this.min;
+                if(udif == 0)
+                {   min = max = 0;
+                }
+                else if(udif < 100)
+                {
+                    min = (udif * min) / 100 + this.min;
+                    max = (udif * max) / 100 + this.min;
+                }
+                
+                Progress next = new Progress(connection);
+                next.chain = chain;
+                next.level = level;
+                next.min   = this.min;
+                next.max   = this.max;
+                next.percent = percent;
+                chain = next; level++;
+                this.min = min; this.max = max; percent = 0;
+                return next.level;
+            }
+            
+            public void Pop()
+            {   if(level == 0) return;
+                Pop(level - 1);
+            }
+
+            public void Pop(uint level)
+            {
+                Progress next = this;
+                do  {   if(next.level < level) return;
+                        if(next.level > level) continue;
+                        if(next == this)       return;
+                        this.chain = next.chain;
+                        this.level = next.level;
+                        this.min   = next.min;
+                        this.max   = next.max;
+                        this.percent = next.percent;
+                        return;
+                    }   while((next = next.chain) != null);
+            }
+            
+            // helper to call the consumer
+            private void MonitorInvoke(string text)
+            {   ZIMapConnection.MonitorInvoke(connection, "ZIMapConnection.Progress", 
+                    ZIMapConnection.Monitor.Progress, text);
+            }
+        }
     }
+#endregion
 }

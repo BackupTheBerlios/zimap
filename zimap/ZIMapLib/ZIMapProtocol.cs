@@ -16,142 +16,7 @@ using System.Collections.Generic;
 namespace ZIMap
 {
     //==========================================================================
-    // Structures
-    //==========================================================================
-
-    /// <summary>
-    /// Holds an untagged server reply.
-    /// </summary>
-    /// <remarks>
-    /// Usually this structure is a member array of <see cref="ZIMapReceiveData"/>.
-    /// </remarks>
-    public struct ZIMapReceiveInfo
-    {
-        public string      Status;
-        public string      Message;
-
-        private ZIMapParser parser;
-        
-        /// <summary>
-        /// Resets the structure to it's initial state
-        /// </summary>
-        /// <remarks>
-        /// Call this method to release resources (mostly the parser). 
-        /// </remarks>
-        public void Reset()
-        {   Status = Message = null;
-            parser = null;
-        }
-        
-        /// <value>
-        /// A parser for the <see cref="Message"/> property.
-        /// </value>
-        /// <remarks>
-        /// This property remembers the last return value (e.g. the parser is
-        /// created  on the 1st call and kept in memory) see <see cref="Reset"/>.
-        /// </remarks>
-        public ZIMapParser Parser
-        {   get {   if(parser != null) return parser;
-                    parser = new ZIMapParser(Message);
-                    return parser;
-                }
-            set {   parser = null;
-                    if(value == null) return; 
-                    ZIMapException.Throw(null, ZIMapErrorCode.MustBeZero, null);
-                }
-        }
-        
-        /// <summary>
-        /// Renders the structure state to a string
-        /// </summary>
-        /// <returns>
-        /// A string for debug output
-        /// </returns>
-        public override string ToString()
-        {   return Status + " " + Message;
-        }
-    }
-
-    /// <summary>
-    /// Holds the server replies to a command.
-    /// </summary>
-    /// <remarks>
-    /// Usually created by <see cref="ZIMapProtocol.Receive(ZIMap.ZIMapReceiveData)"/>
-    /// and consumed by <see cref="ZIMapCommand.ReceiveCompleted"/>.
-    /// </remarks>
-    public struct ZIMapReceiveData
-    {   /// <value>The tag number is set by Send()</value>
-        public uint                 Tag;
-        /// <value>Returned by server (OK, BAD, FAILED)</value>
-        public string               Status;
-        /// <value>Returned by server, descriptive text</value>
-        public string               Message;
-        public ZIMapReceiveInfo[]   Infos;
-        public byte[][]             Literals;
-        public ZIMapReceiveState    ReceiveState;
-
-        private ZIMapParser parser;
-
-        /// <summary>
-        /// Resets the structure to it's initial state
-        /// </summary>
-        /// <remarks>
-        /// Call this method to release resources (mostly the parsers). 
-        /// </remarks>
-        public void Reset()
-        {   Tag = 0;
-            Status = Message = null;
-            Infos = null;
-            Literals = null;
-            ReceiveState = ZIMapReceiveState.Exception;
-        }
-        
-        /// <value>
-        /// A parser for the <see cref="Message"/> property.
-        /// </value>
-        /// <remarks>
-        /// This property remembers the last return value (e.g. the parser is
-        /// created  on the 1st call and kept in memory) see <see cref="Reset"/>.
-        /// </remarks>
-        public ZIMapParser Parser
-        {   get {   if(parser != null) return parser;
-                    parser = new ZIMapParser(Message);
-                    return parser;
-                }
-            set {   parser = null;
-                    if(value == null) return;
-                    ZIMapException.Throw(null, ZIMapErrorCode.MustBeZero, null);
-                }
-        }
-
-        /// <value>
-        /// Returns <c>true</c> if ReceiveState is <see cref="ZIMapReceiveState.Ready"/>
-        /// </value>
-        public bool Succeeded
-        {   get {   return (ReceiveState == ZIMapReceiveState.Ready);   }
-        }
-
-        /// <summary>
-        /// Renders the structure state to a string
-        /// </summary>
-        /// <returns>
-        /// A string for debug output
-        /// </returns>
-        public override string ToString()
-        {   System.Text.StringBuilder sb = new System.Text.StringBuilder();
-            int ninf = (Infos == null) ? 0 : Infos.Length;
-            sb.AppendFormat("ZIMapReceiveData:  ReceiveState={0}  Tag={1}  Infos={2}   Literals={3}",
-                            ReceiveState, Tag, ninf, (Literals == null) ? 0 : Literals.Length);
-            for(int irun=0; irun < ninf; irun++)
-                sb.AppendFormat("\n    Info {0}: {1}", irun+1, Infos[irun]); 
-            sb.AppendFormat("\n    Message: {0}", Message); 
-            return sb.ToString ();
-        }
-    }
-
-
-    //==========================================================================
-    // Classes
+    // ZIMapProtocol    
     //==========================================================================
 
     /// <summary>
@@ -170,6 +35,174 @@ namespace ZIMap
     /// </remarks>
     public abstract class ZIMapProtocol : ZIMapBase
     {
+        //======================================================================
+        // ReceiveState, ReceiveData and ReceiveInfo
+        //======================================================================
+
+        /// <summary>
+        /// Status of a response received from the IMAP server
+        /// <see cref="ZIMapProtocol.Receive"/>
+        /// </summary>
+        public enum ReceiveState
+        {   // Server sent "*" tag (untagged response)
+            Info,
+            // Server sent "+" tag (command continuation)
+            Continue,
+            
+            // Response code was "OK", command completed
+            Ready,
+            // Response code was "NO", command failed
+            Failure,
+            // Response code waas "BAD", protocol error
+            Error,
+            
+            // The connection was closed
+            Closed,
+            // A non-protocol error has occured
+            Exception
+        }
+
+        // -----------------------------------------------------------------------------
+        /// <summary>
+        /// Holds the server replies to a command.
+        /// </summary>
+        /// <remarks>
+        /// Usually created by <see cref="ZIMapProtocol.Receive(ZIMapProtocol.ReceiveData)"/>
+        /// and consumed by <see cref="ZIMapCommand.Completed"/>.
+        /// </remarks>
+        public struct ReceiveData
+        {   /// <value>The tag number is set by Send()</value>
+            public uint                 Tag;
+            /// <value>Returned by server (OK, BAD, FAILED)</value>
+            public string               Status;
+            /// <value>Returned by server, descriptive text</value>
+            public string               Message;
+            /// <value>Returned by server, untagged response lines</value>
+            public ReceiveInfo[]        Infos;
+            /// <value>Returned by server, literal data</value>
+            public byte[][]             Literals;
+            /// <value>The completion state of the command</value>
+            public ReceiveState         State;
+
+            private ZIMapParser parser;
+
+            /// <summary>
+            /// Resets the structure to it's initial state
+            /// </summary>
+            /// <remarks>
+            /// Call this method to release resources (mostly the parsers). 
+            /// </remarks>
+            public void Reset()
+            {   Tag = 0;
+                Status = Message = null;
+                Infos = null;
+                Literals = null;
+                State = ZIMapProtocol.ReceiveState.Exception;
+            }
+            
+            /// <value>
+            /// A parser for the <see cref="Message"/> property.
+            /// </value>
+            /// <remarks>
+            /// This property remembers the last return value (e.g. the parser is
+            /// created  on the 1st call and kept in memory) see <see cref="Reset"/>.
+            /// </remarks>
+            public ZIMapParser Parser
+            {   get {   if(parser != null) return parser;
+                        parser = new ZIMapParser(Message);
+                        return parser;
+                    }
+                set {   parser = null;
+                        if(value == null) return;
+                        ZIMapException.Throw(null, ZIMapException.Error.MustBeZero, null);
+                    }
+            }
+
+            /// <value>
+            /// Returns <c>true</c> if ReceiveState is <see cref="ZIMapProtocol.ReceiveState.Ready"/>
+            /// </value>
+            public bool Succeeded
+            {   get {   return (State == ReceiveState.Ready);   }
+            }
+
+            /// <summary>
+            /// Renders the structure state to a string
+            /// </summary>
+            /// <returns>
+            /// A string for debug output
+            /// </returns>
+            public override string ToString()
+            {   System.Text.StringBuilder sb = new System.Text.StringBuilder();
+                int ninf = (Infos == null) ? 0 : Infos.Length;
+                sb.AppendFormat("Data:  State={0}  Tag={1}  Infos={2}   Literals={3}",
+                                State, Tag, ninf, (Literals == null) ? 0 : Literals.Length);
+                for(int irun=0; irun < ninf; irun++)
+                    sb.AppendFormat("\nInfo {0}: {1}", irun+1, Infos[irun]); 
+                sb.AppendFormat("\nMessage: {0}", Message); 
+                return sb.ToString ();
+            }
+        }
+
+        // -----------------------------------------------------------------------------        
+        /// <summary>
+        /// Holds an untagged server reply.
+        /// </summary>
+        /// <remarks>
+        /// Usually this structure is a member array of <see cref="ReceiveData"/>.
+        /// </remarks>
+        public struct ReceiveInfo
+        {
+            /// <value>Returned by server, status text (might be a number)</value>
+            public string      Status;
+            /// <value>Returned by server, message text</value>
+            public string      Message;
+
+            private ZIMapParser parser;
+            
+            /// <summary>
+            /// Resets the structure to it's initial state
+            /// </summary>
+            /// <remarks>
+            /// Call this method to release resources (mostly the parser). 
+            /// </remarks>
+            public void Reset()
+            {   Status = Message = null;
+                parser = null;
+            }
+            
+            /// <value>
+            /// A parser for the <see cref="Message"/> property.
+            /// </value>
+            /// <remarks>
+            /// This property remembers the last return value (e.g. the parser is
+            /// created  on the 1st call and kept in memory) see <see cref="Reset"/>.
+            /// </remarks>
+            public ZIMapParser Parser
+            {   get {   if(parser != null) return parser;
+                        parser = new ZIMapParser(Message);
+                        return parser;
+                    }
+                set {   parser = null;
+                        if(value == null) return; 
+                        ZIMapException.Throw(null, ZIMapException.Error.MustBeZero, null);
+                    }
+            }
+            
+            /// <summary>
+            /// Renders the structure state to a string
+            /// </summary>
+            /// <returns>
+            /// A string for debug output
+            /// </returns>
+            public override string ToString()
+            {   return Status + " " + Message;
+            }
+        }
+
+        //======================================================================
+        // Class data
+        //======================================================================
+
         private readonly ZIMapTransport  transport;
         private readonly ZIMapConnection connection;
 
@@ -187,13 +220,17 @@ namespace ZIMap
         /// If this property is not set to <c>uint.MaxValue</c> (which is the default)
         /// the server reponses will be checked for "* nn EXISTS" messages and on
         /// reception of such a message this property will be updated and a
-        /// <see cref="ZIMapMonitor.Messages"/> callback will be made. Set this 
-        /// property to <c>0</c> to enable callbacks and to <c>uint.MaxValue</c> to
-        /// disable them. By default these callbacks are disabled to save time. 
+        /// <see cref="ZIMapConnection.Monitor.Messages"/> callback will be made. Set 
+        /// this property to <c>0</c> to enable callbacks and to <c>uint.MaxValue</c> 
+        /// to disable them. By default these callbacks are disabled to save time. 
         /// </value>
         public uint ExistsCount
         {   get {   return exists_cnt;  }
             set {   exists_cnt = value; }
+        }
+
+        public uint SendCount 
+        {   get { return send_cnt; }
         }
 
         /// <value>
@@ -213,23 +250,25 @@ namespace ZIMap
         public string ServerGreeting 
         {   get {   if(greeting != null) return greeting;
                     if(transport == null) return "";
-                    Monitor(ZIMapMonitor.Debug, "ServerGreeting: poll");
+                    MonitorDebug("ServerGreeting: polling");
                     bool bok = false;
                     uint tag = 0;
                     string status, message;
-                    ZIMapReceiveState rsta;
+                    ReceiveState rsta;
                     bok = transport.Poll(1000);              // should be in buffer!
                     if(bok)
                     {   rsta = Receive(out tag, out status, out greeting);
-                        if(rsta != ZIMapReceiveState.Info) greeting = null;
+                        if(rsta != ReceiveState.Info) greeting = null;
                     }
                                                             // use a NOOP to sync                
-                    if(greeting == null && transport.Send("* NOOP"))
-                    {   Monitor(ZIMapMonitor.Error,
-                                "ServerGreeting: Got no greeting, try to resync"); 
+                    if(greeting == null && 
+                        transport.Send(string.Format("{0} NOOP", ++send_cnt)))
+                        // using the "fragment" send because the "normal" send would
+                        // disable the socket timeout which we want for the 1st msg!
+                    {   MonitorError("ServerGreeting: Got no greeting, try to resync");
                         while (true)
                         {   rsta = Receive(out tag, out status, out message);
-                            if(rsta == ZIMapReceiveState.Info)
+                            if(rsta == ReceiveState.Info)
                                 greeting = message;
                             else 
                                 break;
@@ -237,7 +276,8 @@ namespace ZIMap
                     }
                     if(greeting == null)
                     {   greeting = "";   
-                        Error(ZIMapErrorCode.CannotConnect, "Invalid or missing greeting");
+                        RaiseError(ZIMapException.Error.CannotConnect,
+                                   "Invalid or missing greeting");
                     }
                     connection.StartTls(++send_cnt);
                     return greeting;
@@ -257,17 +297,17 @@ namespace ZIMap
         /// On success: the tag number of this command. On error 0 is returned. 
         /// </returns>
         /// <remarks>
-        /// This method does not handle literals, see <see cref="Send(object[])"/>.
+        /// This method does not handle literals, see <see cref="Send(object[], string)"/>.
         /// </remarks>
         public uint Send(string message)
         {   if(transport == null)                           // connection is closed
-            {   Error(ZIMapErrorCode.DisposedObject);
+            {   RaiseError(ZIMapException.Error.DisposedObject);
                 return 0;
             }
 
             object info;
             if(greeting == null) info = ServerGreeting;     // must fetch greeting
-                
+         
             try
             {   uint cnt = ++send_cnt;
                 ZIMapConnection.Callback.Request(connection, cnt, message);
@@ -285,7 +325,7 @@ namespace ZIMap
             catch(Exception inner)
             {   info = inner;
             }
-            Error(ZIMapErrorCode.SendFailed, info);
+            RaiseError(ZIMapException.Error.SendFailed, info);
             return 0;
         }
 
@@ -297,6 +337,10 @@ namespace ZIMap
         /// must be a string. Multiple strings will be sent with a separating
         /// space, byte arrays will be sent as literal data.
         /// </param>
+        /// <param name="error">
+        /// On error this parameter returns a descriptive text (might be a message
+        /// returned by the server).
+        /// </param>
         /// <returns>
         /// On success: the tag number of this command. On error 0 is returned. 
         /// </returns>
@@ -304,17 +348,21 @@ namespace ZIMap
         /// Make sure that any queued command gets sent and that the server reply
         /// is processed before issuing a command containing literal data. This
         /// layer cannot handle pending command output.
+        /// <para />
+        /// If an application uses the command layer (see <see cref="ZIMapFactory"/>)
+        /// output of commands executed by the factory will be read automatically.
         /// </remarks>
-        public uint Send(object[] fragments)
-        {   if(transport == null)                           // connection is closed
-            {   Error(ZIMapErrorCode.DisposedObject);
+        public uint Send(object[] fragments, out string error) {
+            error = "send error";
+            if(transport == null)                           // connection is closed
+            {   RaiseError(ZIMapException.Error.DisposedObject);
                 return 0;
             }
-
+            
             // --- need a string to start ---
             
             if(fragments == null || fragments.Length <= 0 || !(fragments[0] is string))
-            {   Error(ZIMapErrorCode.InvalidArgument);
+            {   RaiseError(ZIMapException.Error.InvalidArgument);
                 return 0;
             }
             
@@ -339,6 +387,7 @@ namespace ZIMap
                         {   bok = transport.Send("");
                             if(!bok) break;
                         }
+                        error = null;
                         return cnt;
                     }
 
@@ -347,7 +396,8 @@ namespace ZIMap
                     message = info as string;
                     if(message != null)                     // string fragment
                     {   if(message.Length <= 0)
-                        {   Error(ZIMapErrorCode.InvalidArgument, "String fragment must not be empty");
+                        {   RaiseError(ZIMapException.Error.InvalidArgument,
+                                       "String fragment must not be empty");
                             return 0;
                         }
                                                             // concatenate strings...
@@ -359,7 +409,13 @@ namespace ZIMap
                                                 message, ((byte[])fragments[idx]).Length);
 
                         if(!btag)                           // initial arg with tag
-                            transport.Send(cnt, message);
+                        {   transport.Send(cnt, message);
+                            ZIMapFactory fact = connection.GetFactoryInUse();
+                            if(fact != null)                // do we have a factory?
+                            {   MonitorDebug("Send: literal causes ExecuteRunning");
+                                fact.ExecuteRunning(null);
+                            }
+                        }
                         else if(message[0] == ')' || message[0] == ']')
                             bok = transport.Send(message);
                         else
@@ -377,13 +433,15 @@ namespace ZIMap
                             if(!bok) break;
                         }
                         blit = true;
-                        while(true)
-                        {   bok = transport.Receive(out tag, out status, out message);
+                        while(true) {
+                            bok = transport.Receive(out tag, out status, out error);
                             if(!bok || tag == "+") break;
-                            if(tag == cnt.ToString())       // oops! Server says error
-                                Error(ZIMapErrorCode.SendFailed, "abort: " + message);
+                            string hexcnt = cnt.ToString("x");
+                            if(tag == hexcnt)               // oops! Server says error
+                                MonitorError("Send: literal not accepted: " + error);
                             else
-                                Error(ZIMapErrorCode.UnexpectedTag, "Want + but got " + tag);
+                                RaiseError(ZIMapException.Error.UnexpectedTag, string.Format(
+                                    "Want '+' or '{0}' but got '{1}'", hexcnt, tag));
                             return 0;
                         }
                         if(bok)
@@ -393,7 +451,7 @@ namespace ZIMap
                     }
                     
                     if(info == null)
-                    {   Error(ZIMapErrorCode.MustBeNonZero);
+                    {   RaiseError(ZIMapException.Error.MustBeNonZero);
                         return 0;
                     }
                 }
@@ -410,16 +468,16 @@ namespace ZIMap
             catch(Exception inner)
             {   info = inner;
             }
-            Error(ZIMapErrorCode.SendFailed, info);
+            RaiseError(ZIMapException.Error.SendFailed, info);
             return 0;
         }
             
         // internal helper to process a single response line
-        private ZIMapReceiveState Receive(ref ZIMapReceiveData data, out byte[][] literals)
+        private ReceiveState Receive(ref ReceiveData data, out byte[][] literals)
         {   literals = null;
             if(transport == null)                        // connection is closed
-            {   Error(ZIMapErrorCode.DisposedObject);
-                return ZIMapReceiveState.Exception;
+            {   RaiseError(ZIMapException.Error.DisposedObject);
+                return ReceiveState.Exception;
             }
 
             object info;
@@ -433,49 +491,49 @@ namespace ZIMap
                     if(tags == "*" || tags == "0")
                     {   if(data.Status == "BYE")
                         {   bye_received = true;
-                            Monitor(ZIMapMonitor.Info, "Receive: 'BYE' will close transport");
+                            MonitorInfo( "Receive: 'BYE' will close transport");
                         }
-                        return ZIMapReceiveState.Info;
+                        return ReceiveState.Info;
                     }
                     if(tags == "+")
-                        return ZIMapReceiveState.Continue;
+                        return ReceiveState.Continue;
                     if(!uint.TryParse(tags, System.Globalization.NumberStyles.AllowHexSpecifier, 
                                       null, out data.Tag))
-                    {   Error(ZIMapErrorCode.UnexpectedTag, "Tag: " + tags);
-                        return ZIMapReceiveState.Exception;
+                    {   RaiseError(ZIMapException.Error.UnexpectedTag, "Tag: " + tags);
+                        return ReceiveState.Exception;
                     }
                     
                     // --- check the status ---
                     
-                    data.ReceiveState = ZIMapReceiveState.Error;
+                    data.State = ReceiveState.Error;
                     if(data.Status == "OK")
                     {   if(bye_received)                    // server sent untagged BYE
                         {   transport.Close();
                             ZIMapConnection.Callback.Closed(connection);
                         }
-                        data.ReceiveState = ZIMapReceiveState.Ready;
+                        data.State = ReceiveState.Ready;
                     }
                     else if(data.Status == "NO")
-                        data.ReceiveState = ZIMapReceiveState.Failure;
+                        data.State = ReceiveState.Failure;
                     else if(data.Status != "BAD")
-                    {   Error(ZIMapErrorCode.UnexpectedData, "Status: " + data.Status);
-                        return ZIMapReceiveState.Exception;
+                    {   RaiseError(ZIMapException.Error.UnexpectedData, "Status: " + data.Status);
+                        return ReceiveState.Exception;
                     }
                     
                     ZIMapConnection.Callback.Result(connection, data);
-                    return data.ReceiveState;
+                    return data.State;
                 }
                 else if(transport.IsClosed)
                 {   ZIMapConnection.Callback.Closed(connection);
-                    return ZIMapReceiveState.Closed;
+                    return ReceiveState.Closed;
                 }
                 info = "transport timeout";
             }
             catch(Exception inner)
             {   info = inner;
             }
-            Error(ZIMapErrorCode.ReceiveFailed, info);
-            return ZIMapReceiveState.Exception;
+            RaiseError(ZIMapException.Error.ReceiveFailed, info);
+            return ReceiveState.Exception;
         }
         
         /// <summary>
@@ -489,14 +547,14 @@ namespace ZIMap
         /// <remarks>
         /// A convenience overload that ignores literals.
         /// </remarks>
-        public ZIMapReceiveState Receive(out uint tag, out string status, out string message)
-        {   ZIMapReceiveData data = new ZIMapReceiveData();
-            ZIMapReceiveState stat = Receive(ref data, out data.Literals);
+        public ReceiveState Receive(out uint tag, out string status, out string message)
+        {   ReceiveData data = new ReceiveData();
+            ReceiveState stat = Receive(ref data, out data.Literals);
             tag = data.Tag;
             status = data.Status;
             message = data.Message;
             if(data.Literals != null)
-                Monitor(ZIMapMonitor.Error, "Receive: literal data ignored");
+                MonitorError("Receive: literal data ignored");
             return stat;
         }
 
@@ -506,19 +564,19 @@ namespace ZIMap
         /// </summary>
         /// <param name="data">A structure containing the received data.</param>
         /// <returns><c>true</c> on success.</returns>
-        public bool Receive(out ZIMapReceiveData data)
-        {   data = new ZIMapReceiveData();
-            data.ReceiveState = Receive(ref data, out data.Literals);
+        public bool Receive(out ReceiveData data)
+        {   data = new ReceiveData();
+            data.State = Receive(ref data, out data.Literals);
             
             // fetch all info data and all literals ...
-            if(data.ReceiveState == ZIMapReceiveState.Info)
+            if(data.State == ReceiveState.Info)
             {   List<string>    infos = new List<string>();
                 List<byte[]>    multi = null;
                 do {
                     infos.Add(data.Status);
                     infos.Add(data.Message);
                     byte[][] literals;
-                    data.ReceiveState = Receive(ref data, out literals);
+                    data.State = Receive(ref data, out literals);
                     if(literals != null)
                     {   if(data.Literals == null)
                             data.Literals = literals;
@@ -530,11 +588,11 @@ namespace ZIMap
                             foreach(byte[] elt in literals) multi.Add(elt);
                         }
                     }
-                } while(data.ReceiveState == ZIMapReceiveState.Info);
+                } while(data.State == ReceiveState.Info);
 
                 // process the received info data array ...
                 int icnt = infos.Count / 2;
-                data.Infos = new ZIMapReceiveInfo[icnt];
+                data.Infos = new ZIMapProtocol.ReceiveInfo[icnt];
                 for(int irun=0; irun < icnt; irun++)
                 {   data.Infos[irun].Status  = infos[irun*2];
                     string message           = infos[irun*2+1];
@@ -551,12 +609,12 @@ namespace ZIMap
             }
 
             // check for errors
-            switch(data.ReceiveState)
-            {   case ZIMapReceiveState.Info:
-                case ZIMapReceiveState.Error:
-                case ZIMapReceiveState.Failure:
-                case ZIMapReceiveState.Ready:   return true;
-                default:                        return false;
+            switch(data.State)
+            {   case ReceiveState.Info:
+                case ReceiveState.Error:
+                case ReceiveState.Failure:
+                case ReceiveState.Ready:   return true;
+                default:                   return false;
             }
         }
     }

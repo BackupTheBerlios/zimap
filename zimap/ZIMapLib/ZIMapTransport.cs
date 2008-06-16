@@ -119,6 +119,10 @@ namespace ZIMap
         private Stream  stream;
         // Timeout in seconds
         private uint    timeout;
+        // Requests that Receive() clears the socket timeout
+        private bool    clearTimeout;
+
+
         // Set by Send() for a new Request
         private bool    startRequest;
         // Set by Poll(), cleared by Send()
@@ -161,7 +165,7 @@ namespace ZIMap
         /// <summary>
         /// Can be used to check if the last error was a timeout
         /// </summary>
-        /// <value>A value of <c>true</c> indicates a timeout.
+        /// <value>A value of <c>true</c> indicates a timeout.</value>
         /// <remarks>Timeouts are usually detected by <see cref="Poll"/> because the
         /// timeout on socket level will be disabled after the 1st message received.
         /// </remarks>
@@ -194,7 +198,7 @@ namespace ZIMap
         public uint LastSelectTag
         {   get {   return selectTag;   }
             set {   selectTag = 0;
-                    if(value != 0) Error(ZIMapErrorCode.MustBeZero);
+                    if(value != 0) RaiseError(ZIMapException.Error.MustBeZero);
                 }
         }
 
@@ -208,7 +212,7 @@ namespace ZIMap
         /// </remarks>
         public void Close()
         {   if(stream == null) return;
-            Monitor(ZIMapMonitor.Debug, "Close: connection closed");
+            MonitorDebug("Close: connection closed");
             stream.Close(); stream = null;
         }
 
@@ -252,11 +256,40 @@ namespace ZIMap
                 }
 
                 // wait for reader to exit - must call ReaderPoll() next !!!
-                Monitor(ZIMapMonitor.Debug, "Poll: sleeping " + ms);
+                MonitorDebug("Poll: sleeping " + ms);
                 rdr_res.AsyncWaitHandle.WaitOne((int)ms, false);
                 if(ms > waitMs) waitMs = 0;
                 else            waitMs -= ms;
                 if(ms < 200)    ms += ms;
+            }
+        }
+
+        /// <summary>
+        /// Changes the current IMap data stream.
+        /// </summary>
+        /// <param name="socket">The socket on whicht the stream is based.</param>
+        /// <param name="stream">The IMap data stream that is to be used.</param>
+        /// <param name="timeout">Command timeout in [s].</param>
+        /// <remarks>
+        /// Throws an ArgumentException if the stream is not readable
+        /// or not writable.
+        /// <para />
+        /// No socket timeouts are used by this class, socket reading is done in
+        /// background by a worker thread.  The blocking read timeouts after the
+        /// given time (see <see cref="Receive(string, string, string)"/>).
+        /// </remarks>
+        public void Setup(System.Net.Sockets.Socket socket,
+                          Stream stream, uint timeout)
+        {
+            this.timeout = timeout;
+            if (socket != null)                 // if we know our socket ...
+            {   clearTimeout = timeout > 0;     // Receive() clears sock timeout
+                this.socket = socket;
+            }
+            if (stream != null)
+            {   if (!stream.CanRead || !stream.CanWrite)
+                    throw new ArgumentException("Not a read+write stream");
+                this.stream = stream;
             }
         }
 
@@ -276,19 +309,20 @@ namespace ZIMap
             }
 
             // Clear Socket timeouts after the 1st read
-            if(socket.ReceiveTimeout > 0)
+            if(clearTimeout && socket.ReceiveTimeout > 0)
             {   socket.ReceiveTimeout = -1;
                 socket.SendTimeout = -1;
+                clearTimeout = false;
             }
 
             // Read literal data
             int ilen = fragment.Length;
             if(ilen > 2 && fragment[ilen-1] == '}') // fragment.EndsWith("}")
             {   if(!ReaderData(out literal))
-                {   Monitor(ZIMapMonitor.Error, "Receive: literal expected");
+                {   MonitorError("Receive: literal expected");
                     return false;
                 }
-                Monitor(ZIMapMonitor.Debug, "Receive: literal size=" + literal.Length);
+                MonitorDebug("Receive: literal size=" + literal.Length);
             }
             return true;
         }
@@ -345,9 +379,10 @@ namespace ZIMap
             // status and message, check if strings are interned ...
             status  = (arr.Length > 1) ? arr[1] : "";
             message = (arr.Length > 2) ? arr[2] : "";
-            ZIMapMonitor llev = (tag == "*") ? ZIMapMonitor.Debug : ZIMapMonitor.Info;
+            ZIMapConnection.Monitor llev = (tag == "*") ? 
+                ZIMapConnection.Monitor.Debug : ZIMapConnection.Monitor.Info;
             if(status == "")
-                Monitor(ZIMapMonitor.Error, "Receive: empty message");
+                MonitorError("Receive: empty message");
             else
             {   string sint = string.IsInterned(status);
                 if(sint != null) status = sint;
@@ -358,7 +393,7 @@ namespace ZIMap
             }
             if(literal == null)
             {   if(MonitorLevel <= llev) 
-                    Monitor(llev, "Receive: message: " + fragment);
+                    MonitorInvoke(llev, "Receive: message: " + fragment);
                 return true;
             }
 
@@ -367,18 +402,18 @@ namespace ZIMap
             while(literal != null)
             {   literals.Add(literal);
                 if(!Receive(out fragment, out literal)) // at least ""
-                {   Monitor(ZIMapMonitor.Error, "Receive: EOF in literal");
+                {   MonitorError("Receive: EOF in literal");
                     break;
                 }
 
                 if(fragment == "")                      // must be the end
                 {   if(literal != null)                 // implementation bug
-                        Monitor(ZIMapMonitor.Error, "Receive: internal error");
+                        MonitorError("Receive: internal error");
                 }
                 else
                     message += fragment;
             }
-            Monitor(llev, "Receive: message: " + message);
+            MonitorInvoke(llev, "Receive: message: " + message);
             literalarray = literals.ToArray();
             return true;
         }
@@ -416,7 +451,7 @@ namespace ZIMap
             if(!Receive(out tag, out status, out message, out literals))
                 return false;
             if(literals != null)
-                Monitor(ZIMapMonitor.Error, "Receive: literal data ignored");
+                MonitorError("Receive: literal data ignored");
             return true;
         }
 
@@ -458,7 +493,7 @@ namespace ZIMap
         public bool Send(uint tag, string message)
         {
             if(message == null || message.Length < 1)
-            {   Error(ZIMapErrorCode.InvalidArgument, "No command to send");
+            {   RaiseError(ZIMapException.Error.InvalidArgument, "No command to send");
                 return false;
             }
 
@@ -502,23 +537,22 @@ namespace ZIMap
         /// </remarks>
         public bool Send(string fragment)
         {   if(fragment == null)
-            {   Error(ZIMapErrorCode.MustBeNonZero);
+            {   RaiseError(ZIMapException.Error.MustBeNonZero);
                 return false;
             }
             if(stream == null)
-            {   Monitor(ZIMapMonitor.Error, "Send: closed");
+            {   MonitorError("Send: closed");
                 return false;
             }
 
             if(fragment.Length > 0)
-            {   if(this.MonitorLevel <= ZIMapMonitor.Info)
-                    Monitor(ZIMapMonitor.Info, (startRequest ?
-                        "Send: request: " : "Send: fragment: ") + fragment);
-                byte[] data = System.Text.ASCIIEncoding.ASCII.GetBytes(fragment);
+            {   MonitorInfo(startRequest ? "Send: request: {0}"
+                                         : "Send: fragment: {0}", fragment);
+                byte[] data = System.Text.Encoding.ASCII.GetBytes(fragment);
                 stream.Write(data, 0, data.Length);
             }
             else
-                Monitor(ZIMapMonitor.Info, "Send: void");
+                MonitorInfo( "Send: void");
             startRequest = false;
             haveTimeout = false;
             stream.WriteByte(13);
@@ -543,10 +577,10 @@ namespace ZIMap
         /// </remarks>
         public bool Send(byte[] data)
         {   if(stream == null)
-            {   Monitor(ZIMapMonitor.Error, "Send: closed");
+            {   MonitorError("Send: closed");
                 return false;
             }
-            Monitor(ZIMapMonitor.Info, "Send: " + data.Length + " bytes");
+            MonitorInfo( "Send: " + data.Length + " bytes");
             stream.Write(data, 0, data.Length);
             return true;
         }
@@ -582,7 +616,7 @@ namespace ZIMap
         /// TextReader.</para>
         /// </remarks>
         protected void ReaderImpl()
-        {   //Monitor(ZIMapMonitor.Debug, "ReaderImpl: start");
+        {   //MonitorDebug("ReaderImpl: start");
             if(stream == null) return;                  // called after close()
 
             bool bquit = false;                         // return from delegate req.
@@ -606,10 +640,10 @@ namespace ZIMap
                 if(rdr_bused >= nsize)
                 {   nsize *= 4;
                     Array.Resize(ref rdr_buffer, nsize);
-                    Monitor(ZIMapMonitor.Debug, "ReaderImpl: buffer size=" + nsize.ToString());
+                    MonitorDebug("ReaderImpl: buffer size=" + nsize.ToString());
                 }
 
-                // read from socket
+                // read from stream
 
                 int bcnt = ReaderRead(rdr_buffer, rdr_bused, nsize-rdr_bused);
                 if(bcnt < 0)                            // exception (timeout)
@@ -618,7 +652,7 @@ namespace ZIMap
                 {   lock(rdr_lines)
                     {   rdr_lines.Add(null);
                     }
-                    Monitor(ZIMapMonitor.Info, "ReaderImpl: connection closed");
+                    MonitorInfo( "ReaderImpl: connection closed");
                     return;
                 }
                 rdr_bused += bcnt;
@@ -632,21 +666,23 @@ namespace ZIMap
                     nlast = bcnt + 1;                   // start index of next line
                     if(bcnt > 0 && rdr_buffer[bcnt-1] == (byte)13)
                         bcnt--;                         // remove the CR of CR/LF
-                    string line = System.Text.ASCIIEncoding.ASCII.GetString(rdr_buffer, ndone, bcnt-ndone);
+                    int llen = bcnt - ndone;            // length of line
+// TODO: Encoding.ASCII not threadsafe. Move to ZMapConverter                    
+                    string line = System.Text.Encoding.ASCII.GetString(rdr_buffer, ndone, llen);
                     ndone = nlast;
 
                     // does the server announce literal data?
                     byte[] data = null;                 // for literal data
-                    if(line.EndsWith("}"))
+                    if(llen > 2 && line[llen-1] == '}')
                     {   bcnt = line.LastIndexOf('{');
                         if(bcnt >= 0)
-                        {   string num = line.Substring(bcnt+1, line.Length-bcnt-2);
+                        {   string num = line.Substring(bcnt+1, llen-bcnt-2);
                             if(num != "" && int.TryParse(num, out bcnt))
                             {   data = new byte[bcnt];
                                 int bdata = 0;
                                 int bleft = rdr_bused - ndone;
                                 if(bleft > bcnt) bleft = bcnt;
-                                Monitor(ZIMapMonitor.Debug, "ReaderImpl: literal of size " + bcnt);
+                                MonitorDebug("ReaderImpl: literal of size " + bcnt);
 
                                 // copy data that is still in the buffer...
                                 if(bleft > 0)
@@ -661,7 +697,7 @@ namespace ZIMap
                                     bleft = ReaderRead(data, bdata, bcnt);
                                     if(bleft <= 0)
                                     {   data = null;
-                                        Monitor(ZIMapMonitor.Error, "ReaderImpl: truncated literal");
+                                        MonitorError("ReaderImpl: truncated literal");
                                         break;
                                     }
                                     bcnt -= bleft; bdata += bleft;
@@ -675,7 +711,7 @@ namespace ZIMap
                     {   ndone = rdr_bused = 0;
                         if(nsize > ninit) rdr_buffer = null;
                     }
-                    //Monitor(ZIMapMonitor.Debug, "ReaderImpl: line: '" + line + "'");
+                    //MonitorDebug("ReaderImpl: line: '" + line + "'");
 
                     // add text (and literal) to the data list ...
                     lock(rdr_lines)
@@ -695,7 +731,7 @@ namespace ZIMap
                     ndone = 0; rdr_bused = bcnt;
                 }
             }
-            Monitor(ZIMapMonitor.Debug, "ReaderImpl: quit");
+            MonitorDebug("ReaderImpl: quit");
         }
 
         // Wrapper mainly to catch timeouts
@@ -705,11 +741,11 @@ namespace ZIMap
             {   return stream.Read(buffer, offs, length);
             }
             catch(Exception ex)
-            {   // HACK: ms leaves socket non-blocking after timeout
-                socket.Blocking = true;
+            {   // Microsoft OS leaves socket non-blocking after timeout
+                if(socket != null) socket.Blocking = true;
 
                 if(rdr_dlg == null)
-                {   Monitor(ZIMapMonitor.Debug, "ReaderRead: Reader was stopped");
+                {   MonitorDebug("ReaderRead: Reader was stopped");
                     return -1;
                 }
                 Exception inner = ex.InnerException;
@@ -718,12 +754,12 @@ namespace ZIMap
                    (inner.Message.Contains("timed out") ||
                     inner.Message.Contains("period of time")))
                 {   haveTimeout = true;
-                    Monitor(ZIMapMonitor.Debug, "ReaderRead: Timeout");
+                    MonitorDebug("ReaderRead: Timeout");
                 }
                 else
-                {   Monitor(ZIMapMonitor.Error, "ReaderRead: exception: " + ex.Message);
+                {   MonitorError("ReaderRead: exception: " + ex.Message);
                     if(inner != null && ex.Message != inner.Message)
-                        Monitor(ZIMapMonitor.Info, "ReaderRead: exception: " + inner.Message);
+                        MonitorInfo( "ReaderRead: exception: " + inner.Message);
                 }
                 return -1;
             }
@@ -772,7 +808,7 @@ namespace ZIMap
             else
             {   line = data as string;
                 if(line == null)
-                {   Monitor(ZIMapMonitor.Error, "ReaderLine: unexpected literal");
+                {   MonitorError("ReaderLine: unexpected literal");
                     return false;                   // handle like 'no data'
                 }
             }
@@ -836,14 +872,14 @@ namespace ZIMap
             {   if(rdr_lines == null)               // only once
                     rdr_lines = new List<object>();
                 rdr_dlg = new Reader(ReaderImpl);
-                Monitor(ZIMapMonitor.Debug, "ReaderPoll: Initialise Reader");
+                MonitorDebug("ReaderPoll: Initialise Reader");
                 rdr_res = rdr_dlg.BeginInvoke(null, null);
             }
 
             // check background status - must lock!
             lock(rdr_lines)
             {   if(rdr_res.IsCompleted && stream != null)
-                {   Monitor(ZIMapMonitor.Debug, "ReaderPoll: Continue Reader");
+                {   MonitorDebug("ReaderPoll: Continue Reader");
                     rdr_dlg.EndInvoke(rdr_res);     // would re-throw exception
                     rdr_res = rdr_dlg.BeginInvoke(null, null);
                 }
@@ -867,14 +903,17 @@ namespace ZIMap
             if(timeout == 0)
                 rdr_res.AsyncWaitHandle.WaitOne();  // wait forever
             else
-                if(!rdr_res.AsyncWaitHandle.WaitOne((int)timeout*1000, false))
-                {   Monitor(ZIMapMonitor.Error, "ReaderPoll: Timeout ");
+            {   if(!rdr_res.AsyncWaitHandle.WaitOne((int)timeout*1000, false)) 
+                {   MonitorError("ReaderPoll: Timeout ");
                     haveTimeout = true;
                     return false;
                 }
+            }
 
-            // restart reader (recurse without wait) ...
-            return ReaderPoll(false, bSingle);
+            // restart reader
+            if(ReaderPoll(false, bSingle)) return true;
+            MonitorDebug("ReaderPoll: No Input after WaitOne");
+            return ReaderPoll(true, bSingle);
         }
 
         // ---------------------------------------------------------------------
@@ -892,44 +931,14 @@ namespace ZIMap
             if(rdr_res == null) return false;       // unexpected
 
             if (umod == 0)
-            {   Monitor(ZIMapMonitor.Debug, "ReaderStop: single line");
+            {   MonitorDebug("ReaderStop: single line");
                 ReaderPoll(false, true);
             }
             else
-            {
-                // HACK: wait 300ms (MS Socket lib blocks when read causes wait)
-                //if(socket.Poll(300000, System.Net.Sockets.SelectMode.SelectRead))
-                //    Monitor(ZIMapMonitor.Debug, "ReaderStop: ready");
+            {   // HACK: wait 300ms (MS Socket lib blocks when read causes wait)
                 System.Threading.Thread.Sleep(300);
             }
             return true;
-        }
-
-        /// <summary>
-        /// Changes the current IMap data stream.
-        /// </summary>
-        /// <param name="socket">The socket on whicht the stream is based.</param>
-        /// <param name="stream">The IMap data stream that is to be used.</param>
-        /// <param name="timeout">Command timeout in [s].</param>
-        /// <remarks>
-        /// Throws an ArgumentException if the stream is not readable
-        /// or not writable.
-        /// <para />
-        /// No socket timeouts are used by this class, socket reading is done in
-        /// background by a worker thread.  The blocking read timeouts after the
-        /// given time (see <see cref="Receive"/>).
-        /// </remarks>
-        public void Setup(System.Net.Sockets.Socket socket,
-                          Stream stream, uint timeout)
-        {
-            this.timeout = timeout;
-            if (socket != null)
-                this.socket = socket;
-            if (stream != null)
-            {   if (!stream.CanRead || !stream.CanWrite)
-                    throw new ArgumentException("Not a read+write stream");
-                this.stream = stream;
-            }
         }
     }
 }

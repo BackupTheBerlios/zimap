@@ -18,18 +18,19 @@ namespace ZIMap
     // ZIMapFactory
     //==========================================================================
 
-    // TODO: Delegate callback on completion
-    // TODO: Factory.AsyncExecute
- 
     /// <summary>
-    /// The root of the IMap command layer.
+    /// The root of the IMap command layer that simplifies the execution of
+    /// IMap commands.
     /// </summary>
     /// <remarks>
-    /// This class handles IMap command via the <see cref="ZIMapCommand"/> class.
-    /// Commands are created (see <see cref="CreateGeneric"/> and friends), get
+    /// This class manages IMap commands via the <see cref="ZIMapCommand"/> class.
+    /// <para/>
+    /// Commands are created (see <see cref="CreateGeneric"/> and friends), are
     /// queued for execution (see <see cref="QueueCommand"/>) and last but not
-    /// least they contain the server response (see <see cref="ExecuteCommands(bool)"/>
-    /// and <see cref="ReceiveCompleted"/>). Finally command can be removed
+    /// least they are associated with the server response
+    /// (see <see cref="ExecuteCommands(bool)"/> and <see cref="Completed"/>).
+    /// <para/>
+    /// Finally commands can be automatically or manually removed from the factory
     /// (see <see cref="DisposeCommands"/> and <see cref="EnableAutoDispose"/>).
     /// </remarks>
     public abstract class ZIMapFactory : ZIMapBase, IDisposable
@@ -73,7 +74,7 @@ namespace ZIMap
                     return capabilities;
                 }
             set {   capabilities = null;
-                    if(value != null) Error(ZIMapErrorCode.MustBeZero);
+                    if(value != null) RaiseError(ZIMapException.Error.MustBeZero);
                 }
         }
 
@@ -105,14 +106,13 @@ namespace ZIMap
         /// </value>
         /// <remarks>
         /// Searches the list of command for an entry with a command state 
-        /// of <see cref="ZIMapCommandState.Running"/>. This is much faster
+        /// of <see cref="ZIMapCommand.CommandState.Running"/>. This is much faster
         /// than checking the array returned by <see cref="RunningCommands"/>.
         /// </remarks>
         public bool HasRunningCommands
         {   get {   if(GetCommands() == null) return false; // parent closed
                     foreach(ZIMapCommand cmd in commands)
-                        if(cmd.CommandState == ZIMapCommandState.Running)
-                            return true;
+                        if(cmd.State == ZIMapCommand.CommandState.Running) return true;
                     return false;
                 }
         }
@@ -137,7 +137,7 @@ namespace ZIMap
                     return hierarchyDelimiter;
                 }
             set {   hierarchyDelimiter = (char)0;
-                    if(value != (char)0) Error(ZIMapErrorCode.MustBeZero);
+                    //if(value != (char)0) RaiseError(ZIMapException.Error.MustBeZero);
                 }
         }
         
@@ -157,9 +157,13 @@ namespace ZIMap
         {   get {   return GetCommands(true);  }
         }
         
-        /// <value>
-        /// Return an array of all running commands
-        /// </value>
+        /// <summary>Get commands that are running but not yet completed</summary>
+        /// <value>Return an array of all running commands</value>
+        /// <remarks>
+        /// When no command with state <see cref="ZIMapCommand.CommandState.Running"/>
+        /// is found, an empty array is returned, see <see cref="GetCommands(bool)"/> for
+        /// details.
+        /// </remarks>
         public ZIMapCommand[] RunningCommands
         {   get {   return GetCommands(false);  }
         }
@@ -209,14 +213,14 @@ namespace ZIMap
         public bool DisposeCommands(ZIMapCommand lastToDispose, bool overrideAutoDispose)
         {
             if(lastToDispose == null && overrideAutoDispose)
-                Monitor(ZIMapMonitor.Info, "Disposing " + commands.Count + " command(s)");
+                MonitorDebug( "Disposing " + commands.Count + " command(s)");
             
             uint tag = 0;
             if(lastToDispose != null)                       // get target tag
             {   tag = lastToDispose.Tag;
-                Monitor(ZIMapMonitor.Debug, "Disposing (auto): " + tag);
+                MonitorDebug("Disposing (auto): " + tag);
                 if(tag == 0)
-                {   Error(ZIMapErrorCode.CommandState, "not sent, no tag");
+                {   RaiseError(ZIMapException.Error.CommandState, "not sent, no tag");
                     return false;
                 }
             }
@@ -228,7 +232,7 @@ namespace ZIMap
                 {   if(cmd.Tag > tag) continue;             // younger than target
                     if(!overrideAutoDispose && !cmd.AutoDispose)
                                                   continue; // no autoDispose
-                   Monitor(ZIMapMonitor.Debug, "Disposing (auto): " + cmd.Tag);
+                   MonitorDebug("Disposing (auto): " + cmd.Tag);
                    cmd.Dispose();
                 }
             }
@@ -241,7 +245,7 @@ namespace ZIMap
         private List<ZIMapCommand> GetCommands()
         {   if(commands != null) return commands;           // ok, on stock
             if( ((ZIMapConnection)Parent).CommandLayer != this)
-            {   Error(ZIMapErrorCode.DisposedObject);
+            {   RaiseError(ZIMapException.Error.DisposedObject);
                 return null;                                // parent closed
             }
             commands = new List<ZIMapCommand>();
@@ -253,11 +257,11 @@ namespace ZIMap
             int cntCompleted = 0;  int cntRunning = 0;
             // pass1: count the commands
             foreach(ZIMapCommand cmd in commands)
-                switch(cmd.CommandState)
-                {   case ZIMapCommandState.Running:
+                switch(cmd.State)
+                {   case ZIMapCommand.CommandState.Running:
                             cntRunning++; break;
-                    case ZIMapCommandState.Completed:
-                    case ZIMapCommandState.Failed:
+                    case ZIMapCommand.CommandState.Completed:
+                    case ZIMapCommand.CommandState.Failed:
                             cntCompleted++; break;
                 }
             
@@ -267,11 +271,11 @@ namespace ZIMap
             if(cnt <= 0) return arr; 
             int run = 0;
             foreach(ZIMapCommand cmd in commands)
-            {   switch(cmd.CommandState)
-                {   case ZIMapCommandState.Running:
+            {   switch(cmd.State)
+                {   case ZIMapCommand.CommandState.Running:
                             if(bCompleted) continue; break;
-                    case ZIMapCommandState.Completed:
-                    case ZIMapCommandState.Failed:
+                    case ZIMapCommand.CommandState.Completed:
+                    case ZIMapCommand.CommandState.Failed:
                             if(bCompleted) break; continue;
                     default:
                          continue;
@@ -285,10 +289,8 @@ namespace ZIMap
         {   if(GetCommands() == null) return false;         // parent closed
             commands.Remove(command);                       // may fail: ok
             commands.Add(command);                          // move to start
-            if(command.CommandState == ZIMapCommandState.Queued)
+            if(command.State == ZIMapCommand.CommandState.Queued)
                 return true;                                // no change
-            if(command is ZIMapCommand.Login)
-                username = ((ZIMapCommand.Login)command).User;
             return command.Queue();                         // tell the command
         }
 
@@ -296,7 +298,7 @@ namespace ZIMap
         {   if(GetCommands() == null) return false;         // parent closed
             if(!commands.Remove(command))
                                       return false;         // not in list
-            if(command.CommandState != ZIMapCommandState.Disposed)
+            if(command.State != ZIMapCommand.CommandState.Disposed)
                 command.Reset();                            // tell the command
             return true;
         }
@@ -320,17 +322,14 @@ namespace ZIMap
 
             // Send queued commands to server ...
             foreach(ZIMapCommand cmd in commands)
-            {   if(cmd.CommandState != ZIMapCommandState.Queued) continue;
-                if(cmd.HasLiterals)                         // clear queue
-                {   Monitor(ZIMapMonitor.Debug, "ExcecCommands: literal causing flush");
-                    ExecuteWait(null);
-                }
+            {   if(cmd.State != ZIMapCommand.CommandState.Queued) 
+                    continue;
                 if(!cmd.Execute(false))                     // send command
                     return false;
             }
             
             // Wait for results            
-            return wait ? ExecuteWait(null) : true;
+            return wait ? ExecuteRunning(null) : true;
         }
 
         /// <summary>
@@ -353,32 +352,47 @@ namespace ZIMap
         {
             if(!ExecuteCommands(false))                     // send queued commands
                 return false;
-            return ExecuteWait(waitfor);                    // Wait for results
+            return ExecuteRunning(waitfor);                 // Wait for results
         }
 
-        // This is a helper that waits for all running commands.
-        private bool ExecuteWait(ZIMapCommand waitfor)
+        /// <summary>
+        /// Wait for running commands to complete.
+        /// </summary>
+        /// <param name="waitfor">
+        /// Stop waiting after the completion of the given command, can be <c>null</c>.
+        /// </param>
+        /// <returns>
+        /// <c>true</c> on success.
+        /// </returns>
+        /// <remarks>
+        /// This routine just waits for the results being receiced from the server.
+        /// If does not send queued commands.  For a <c>null</c> argument the
+        /// routine waits for all running commands to complete.
+        /// </remarks>
+        public bool ExecuteRunning(ZIMapCommand waitfor)
         {   while(HasRunningCommands)
-            {   ZIMapReceiveData rs;
-                Monitor(ZIMapMonitor.Debug, "ExecuteCommands: waiting");
+            {   ZIMapProtocol.ReceiveData rs;
+                MonitorDebug("ExecuteRunning: waiting");
                 if( ((ZIMapConnection)Parent).ProtocolLayer.Receive(out rs) )
-                {    ReceiveCompleted(rs);
+                {    Completed(rs);
                      if(waitfor != null && waitfor.Tag == rs.Tag)
                         break;
                 }
                 else
-                {   Monitor(ZIMapMonitor.Error, "ExecuteCommands: receive failed");
+                {   MonitorError("ExecuteRunning: receive failed");
                     return false;
                 }
             }
             return true;
         }
         
-        public bool ReceiveCompleted(ZIMapReceiveData rdata)
+        public bool Completed(ZIMapProtocol.ReceiveData rdata)
         {   if(GetCommands() == null) return false;         // parent closed
             foreach(ZIMapCommand cmd in commands)
             {   if(cmd.Tag != rdata.Tag) continue;
-                return cmd.ReceiveCompleted(rdata);
+                if(cmd is ZIMapCommand.Login && rdata.Succeeded)
+                    username = ((ZIMapCommand.Login)cmd).User;
+                return cmd.Completed(rdata);
             }
             return false;
         }
@@ -390,6 +404,23 @@ namespace ZIMap
             return cmd;
         }
 
+        /// <summary>
+        /// Create a typed command object by it's name.
+        /// </summary>
+        /// <param name="name">
+        /// An IMap command name like FETCH or SEARCH.
+        /// </param>
+        /// <returns>
+        /// The create command object casted to <see cref="ZIMapCommand.Generic"/>.
+        /// </returns>
+        /// <remarks>
+        /// Despite the return type this function for example creates a
+        /// <see cref="ZIMapCommand.Fetch"/> oject when the argument is FETCH.
+        /// The argument case is igored.
+        /// <para/>
+        /// For invalid comman names a <see cref="ZIMapException.Error.NotImplemented"/>
+        /// error is raised.  
+        /// </remarks>
         public ZIMapCommand.Generic CreateByName(string name)
         {   if(name == null || name.Length < 3) return null;
             if(GetCommands() == null) return null;          // parent closed
@@ -401,7 +432,7 @@ namespace ZIMap
             object inst = System.Reflection.Assembly.GetExecutingAssembly().CreateInstance(full,
                    false, System.Reflection.BindingFlags.CreateInstance, null, args, null, null);
             if(inst == null)
-            {   Error(ZIMapErrorCode.NotImplemented, full);
+            {   RaiseError(ZIMapException.Error.NotImplemented, full);
                 return null;
             }
             ZIMapCommand.Generic cmd = (ZIMapCommand.Generic)inst;
@@ -413,6 +444,30 @@ namespace ZIMap
         {   return FindInStrings(Capabilities, 0, capname, false) >= 0;
         }
         
+        /// <summary>
+        /// Routine for searching a string array for a given value.
+        /// </summary>
+        /// <param name="strings">
+        /// The array to be searched, <c>null</c> or an empty array are OK.
+        /// </param>
+        /// <param name="start">
+        /// Start index.
+        /// </param>
+        /// <param name="what">
+        /// A key that is to be searched, <c>null</c> is OK.
+        /// </param>
+        /// <param name="substring">
+        /// Do a substring search if <c>true</c>.
+        /// </param>
+        /// <returns>
+        /// An index value on success or <c>-1</c> on error.
+        /// </returns>
+        /// <remarks>
+        /// The routine should not throw any errors, all reference argument can safely
+        /// be <c>null</c>.
+        /// <para/>
+        /// The search is always case insensitive.
+        /// </remarks>
         public static int FindInStrings(string[] strings, int start, string what, bool substring)
         {
             if(strings == null || strings.Length < 1 || what == null) return -1;
@@ -430,49 +485,232 @@ namespace ZIMap
             return -1;
         }
         
-        // =====================================================================
-        // Create routines
-        // =====================================================================
-/*
-        public ZIMapCommand.Append      CreateAppend()     { return (ZIMapCommand.Append) CreateByName("Append"); } 
-        public ZIMapCommand.Capability  CreateCapability() { return (ZIMapCommand.Capability) CreateByName("Capability"); } 
-        public ZIMapCommand.Check       CreateCheck()      { return (ZIMapCommand.Check)  CreateByName("Check");  } 
-        public ZIMapCommand.Close       CreateClose()      { return (ZIMapCommand.Close)  CreateByName("Close");  } 
-        public ZIMapCommand.Copy        CreateCopy()       { return (ZIMapCommand.Copy)   CreateByName("Copy");   } 
-        public ZIMapCommand.Create      CreateCreate()     { return (ZIMapCommand.Create) CreateByName("Create"); } 
-        public ZIMapCommand.Delete      CreateDelete()     { return (ZIMapCommand.Delete) CreateByName("Delete"); } 
-        public ZIMapCommand.Examine     CreateExamine()    { return (ZIMapCommand.Examine)CreateByName("Examine");} 
-        public ZIMapCommand.Expunge     CreateExpunge()    { return (ZIMapCommand.Expunge)CreateByName("Expunge");} 
-        public ZIMapCommand.Fetch       CreateFetch()      { return new ZIMapCommand.Fetch(this);  } 
-        public ZIMapCommand.List        CreateList()       { return new ZIMapCommand.List(this);   } 
-        public ZIMapCommand.Login       CreateLogin()      { return (ZIMapCommand.Login)  CreateByName("Login");  } 
-        public ZIMapCommand.Logout      CreateLogout()     { return (ZIMapCommand.Logout) CreateByName("Logout"); } 
-        public ZIMapCommand.Lsub        CreateLsub()       { return (ZIMapCommand.Lsub)   CreateByName("Lsub");   } 
-        public ZIMapCommand.Rename      CreateRename()     { return (ZIMapCommand.Rename) CreateByName("Rename"); } 
-        public ZIMapCommand.Select      CreateSelect()     { return (ZIMapCommand.Select) CreateByName("Select"); }
-        public ZIMapCommand.Search      CreateSearch()     { return (ZIMapCommand.Search) CreateByName("Search"); }
-        public ZIMapCommand.Status      CreateStatus()     { return (ZIMapCommand.Status) CreateByName("Status"); }
-        public ZIMapCommand.Store       CreateStore()      { return (ZIMapCommand.Store)  CreateByName("Store");  }
-        public ZIMapCommand.Subscribe   CreateSubscribe()  { return (ZIMapCommand.Subscribe)  CreateByName("Subscribe");  }
-        public ZIMapCommand.Unsubscribe CreateUnsubscribe(){ return (ZIMapCommand.Unsubscribe)CreateByName("Unsubscribe");}
-
-        // Namespace command (www.faqs.org/rfcs/rfc2342.html) ...
-
-        public ZIMapCommand.Namespace   CreateNamespace()       { return new ZIMapCommand.Namespace(this);  }
+        /// <summary>
+        /// Search a string array of partially parserd data for an item.
+        /// </summary>
+        /// <param name="parts">
+        /// The string array to be searched.
+        /// </param>
+        /// <param name="item">
+        /// The item to be searched for.
+        /// </param>
+        /// <param name="text">
+        /// Returns the text from array element that follows the item on success.
+        /// Will return an empty string on error. Should never return <c>null</c>.
+        /// </param>
+        /// <returns>
+        /// On success a value of <c>true</c> is returned.
+        /// </returns>
+        /// <remarks>
+        /// The commands FETCH and STORE can return partially parsed data in their
+        /// Item arrays.  This function is made to search this data.
+        /// </remarks>
+        public static bool FindInParts(string[] parts, string item, out string text)
+        {   text = "";
+            int idx = FindInStrings(parts, 0, item, false);
+            if(idx < 0) return false;                           // item not found
+            if(++idx >= parts.Length) return false;             // no value
+            text = parts[idx];
+            if(text.Length > 0 && text[0] == '"')               // must unquote
+            {   ZIMapParser parser = new ZIMapParser(text);
+                text = parser[0].Text;
+            }
+            return true;
+        }
         
-        // ACL commands (see www.faqs.org/rfcs/rfc4314.html) ...
+        // =====================================================================
+        // The Bulk command class
+        // =====================================================================
+        
+        /// <summary>
+        /// Conveniency function to create a Bulk command instance.
+        /// </summary>
+        /// <param name="command">
+        /// An IMAP command name like FETCH or SEARCH.
+        /// </param>
+        /// <param name="size">
+        /// The number of aggregated commands.
+        /// </param>
+        /// <param name="uidCommand">
+        /// Value for the <see cref="ZIMapCommand.UidCommand"/> property.
+        /// </param>
+        /// <returns>
+        /// The <see cref="Bulk"/> instance.
+        /// </returns>
+        public Bulk CreateBulk(string command, uint size, bool uidCommand)
+        {   return new Bulk(this, command, size, uidCommand);
+        }
+        
+        /// <summary>
+        /// A class to simplify the use of IMap parallel command execution.
+        /// </summary>
+        /// <remarks>
+        /// The class aggregates an array of commands of the same type and provides
+        /// methods to use these commands in a circular pattern.
+        /// <para/>
+        /// For the commands the <see cref="ZIMapCommand.AutoDispose"/> property
+        /// is set to <c>false</c>.  So it is very important to call <see cref="Dispose"/>
+        /// on the Bulk class instance in order to remove the commands from the factory.
+        /// </remarks>
+        public class Bulk : IDisposable
+        {
+            private ZIMapFactory            parent;
+            private ZIMapCommand.Generic[]  commands;
+            
+            /// <summary>
+            /// Construct a Bulk instance and allocate the command array
+            /// </summary>
+            /// <param name="parent">
+            /// The owner of the allocated commands.
+            /// </param>
+            /// <param name="command">
+            /// An IMAP command name like FETCH or SEARCH.
+            /// </param>
+            /// <param name="uidCommand">
+            /// Value for the <see cref="ZIMapCommand.UidCommand"/> property.
+            /// </param>
+            /// <param name="size">
+            /// The number of aggregated commands.
+            /// </param>
+            public Bulk(ZIMapFactory parent, string command, uint size, bool uidCommand)
+            {   this.parent = parent;
+                commands = new ZIMapCommand.Generic[size];
+                for(uint urun=0; urun < size; urun++)
+                {   commands[urun] = parent.CreateByName(command);
+                    if(commands[urun] == null)      // aborting ...
+                    {   commands = null; return;
+                    }
+                    commands[urun].AutoDispose = false;
+                    commands[urun].UidCommand = uidCommand;
+                }
+            }
+            
+            /// <summary>
+            /// The destructor calls <see cref="Dispose"/>.
+            /// </summary>
+            /// <remarks>
+            /// Please do not rely on this destructor - call <see cref="Dispose"/>
+            /// explicitly.  Not calling Dispose should be considered as a bug.
+            /// </remarks>
+            ~Bulk()
+            {   Dispose();
+            }
+            
+            /// <summary>
+            /// Remove the commands from the parent factory.
+            /// </summary>
+            /// <remarks>
+            /// For the commands the <see cref="ZIMapCommand.AutoDispose"/> property
+            /// is set to <c>false</c>.  So it is very important to call <see cref="Dispose"/>
+            /// on the Bulk class instance in order to remove the commands from the factory.
+            /// </remarks>
+            public void Dispose()
+            {   if(commands == null) return;
+                GC.SuppressFinalize(this);
+                for(uint uidx=0; uidx < commands.Length; uidx++)
+                    commands[uidx].Dispose();
+                commands = null;
+            }
+            
+            private uint FindIndex(ZIMapCommand.Generic cmd)
+            {   if(commands == null) return uint.MaxValue;   
+                if(cmd == null) return 0;   
+                for(uint uidx=0; uidx < commands.Length; uidx++)
+                    if(object.ReferenceEquals(commands[uidx], cmd)) return uidx; 
+                return uint.MaxValue;
+            }
+            
+            /// <summary>
+            /// An iterator to get the next command for executing a request.
+            /// </summary>
+            /// <param name="current">
+            /// Returns the next command. On the initial call the value should 
+            /// be <c>null</c>.  
+            /// </param>
+            /// <returns>
+            /// The result of <see cref="ZIMapCommand.IsPending"/>.
+            /// </returns>
+            /// <remarks>
+            /// If the return value is <c>true</c> the caller must fetch and read the result
+            /// and call  <see cref="ZIMapCommand.Reset"/> before the command can be reused.
+            /// <para/>
+            /// If the value of <paramref name="current"/> references a command whose state
+            /// is <see cref="ZIMapCommand.CommandState.Queued"/> the queued command will
+            /// be sent automatically.
+            /// </remarks>
+            /// <para />
+            /// Here a simple usage expample:
+            /// <para /><example><code lang="C#">
+            /// uint ucnt = NNN;                        // number of messages
+            /// uint usnd = 0;                          // send counter
+            /// uint urcv = 0;                          // receive counter
+            /// ZIMapCommand.Generic current = null;
+            /// ZIMapFactory.Bulk bulk = app.Factory.CreateBulk("XXXX", 4, false);
+            /// 
+            /// while(urcv &lt; ucnt)
+            /// {   // step 1: queue request and check for response ...
+            ///     bool done = bulk.NextCommand(ref current);
+            /// 
+            ///     // step 2: check server reply for error ...
+            ///     if(done) 
+            ///     {   urcv++;
+            ///         if(!current.CheckSuccess("Command failed")) done = false; 
+            ///     }
+            /// 
+            ///     // step 3: process data sent by server ...
+            ///     if(done)
+            ///     {          
+            ///     }
+            /// 
+            ///     // step 4: create a new request
+            ///     if(usnd &lt; ucnt)
+            ///     {   current.Reset();
+            ///         current.Queue();
+            ///         usnd++;
+            ///     }
+            /// }
+            /// bulk.Dispose();
+            /// </code></example>            
+            public bool NextCommand(ref ZIMapCommand.Generic current)
+            {   if(current != null && current.State == ZIMapCommand.CommandState.Queued)
+                    current.Execute(false);
+                uint uidx = FindIndex(current);
+                if(uidx == uint.MaxValue)
+                    parent.RaiseError(ZIMapException.Error.InvalidArgument);
+                if(current != null) uidx++;
+                if(uidx >= commands.Length) uidx = 0;
+                current = commands[uidx];
+                return current.IsPending;
+            }
 
-        public ZIMapCommand.DeleteACL    CreateDeleteACL()      { return new ZIMapCommand.DeleteACL(this);  }
-        public ZIMapCommand.GetACL       CreateGetACL()         { return new ZIMapCommand.GetACL(this);     }
-        public ZIMapCommand.ListRights   CreateListRights()     { return new ZIMapCommand.ListRights(this); }
-        public ZIMapCommand.MyRights     CreateMyRights()       { return new ZIMapCommand.MyRights(this);   }
-        public ZIMapCommand.SetACL       CreateSetACL()         { return new ZIMapCommand.SetACL(this);     }
-
-        // Quota commands (see www.faqs.org/rfcs/rfc2087.html)...
-
-        public ZIMapCommand.GetQuota     CreateGetQuota()       { return new ZIMapCommand.GetQuota(this);    }
-        public ZIMapCommand.GetQuotaRoot CreateGetQuotaRoot()   { return new ZIMapCommand.GetQuotaRoot(this);}
-        public ZIMapCommand.SetQuota     CreateSetQuota()       { return new ZIMapCommand.SetQuota(this);    }
-  */      
+            /// <summary>
+            /// An iterator to get the next command for with a pending request.
+            /// </summary>
+            /// <param name="current">
+            /// Returns the next command.
+            /// </param>
+            /// <returns>
+            /// A value of <c>true</c> if the command is pending.
+            /// </returns>
+            /// <remarks>
+            /// This iterator is typically used after all commands where submitted
+            /// to fetch the results that are still pending.  It should be called in
+            /// a loop as long as it returns <c>true</c>.
+            /// </remarks>
+            public bool NextPending(ref ZIMapCommand.Generic current)
+            {   uint uidx = FindIndex(current);
+                if(uidx == uint.MaxValue)
+                    parent.RaiseError(ZIMapException.Error.InvalidArgument);
+                uint ucnt = (uint)commands.Length;
+                while(ucnt > 0)
+                {   ucnt--; 
+                    if(current != null) uidx++;
+                    if(uidx >= commands.Length) uidx = 0;
+                    current = commands[uidx];
+                    if(current.IsPending) return true;
+                }
+                return false;
+            }
+        }
     }
 }

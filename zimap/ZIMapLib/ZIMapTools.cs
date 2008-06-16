@@ -15,118 +15,6 @@ using System.Collections.Generic;
 namespace ZIMap
 {
     //==========================================================================
-    // Enumerations    
-    //==========================================================================
-
-    /// <summary>
-    /// Error codes used to throw an exception, see <see cref="ZIMapException"/>
-    /// </summary>
-    /// <remarks>
-    /// Usually some additional text to describe the problem is passed along
-    /// with <see cref="ZIMapException"/>
-    /// </remarks>
-    public enum ZIMapErrorCode {
-        /// <summary>No error has occured (used as flag)</summary>
-        NoError,    // must be first
-        
-        /// <summary>Cannot map the protocol name to the port number</summary>
-        UnknownProtocol,
-        /// <summary>Cannot connect to server</summary>
-        CannotConnect,
-        /// <summary>The server sent an unexpected tag that we don't understand</summary>
-        UnexpectedTag,
-        /// <summary>Could not receive data from server</summary>
-        ReceiveFailed,
-        /// <summary>The server sent data with a syntax that we don't understand</summary>
-        UnexpectedData,
-        /// <summary>Could not send data to the server</summary>
-        SendFailed,
-        /// <summary>Failed to close the connenction (exception in clean-up)</summary>
-        CloseFailed,
-        /// <summary>Attempt to use a ZIMapCommand after Dispose()</summary>
-        DisposedObject,
-        /// <summary>ZIMapCommand was queued but not yet answered</summary>
-        CommandBusy,
-        /// <summary>Cannot perform ZIMapCommand request in this state</summary>
-        CommandState,
-        /// <summary>Somthing that is not implemented was requested</summary>
-        NotImplemented,
-        /// <summary>A method was called with an inavalid argument</summary>
-        InvalidArgument,
-        /// <summary>Invalid argument, value must be 0 or null</summary>
-        MustBeZero,
-        /// <summary>Invalid argument, value cannot be 0 or null</summary>
-        MustBeNonZero,
-        /// <summary>Something unexpected has happened</summary>
-        Unexpected,
-        
-        /// <summary>Unknow error (was an invalid error code)</summary>
-        Unknown     // must be last
-    };
-
-    /// <summary>
-    /// Status of a response received from the IMAP server
-    /// see ZIMapConnection::Receive
-    /// </summary>
-    public enum ZIMapReceiveState
-    {   // Server sent "*" tag (untagged response)
-        Info,
-        // Server sent "+" tag (command continuation)
-        Continue,
-        
-        // Response code was "OK", command completed
-        Ready,
-        // Response code was "NO", command failed
-        Failure,
-        // Response code waas "BAD", protocol error
-        Error,
-        
-        // The connection was closed
-        Closed,
-        // A non-protocol error has occured
-        Exception
-    }
-
-    /// <summary>
-    /// Processing status of a  <see cref="ZIMapCommand"/> object.
-    /// </summary>
-    public enum ZIMapCommandState
-    {   /// <summary>Command was just created or did a Reset().</summary>
-        Created,
-        /// <summary>Command was queued but is not yet sent.</summary>
-        Queued,
-        /// <summary>Command was sent but is not yet completed.</summary>
-        Running,
-        /// <summary>Command completed but failed.</summary>
-        Failed,
-        /// <summary>Command successfully completed.</summary>
-        Completed,
-        /// <summary>The command's Dispose method has been called.</summary>
-        Disposed
-    }
-
-    /// <summary>
-    /// Indicates the type of information passed to a Monitor() function.
-    /// </summary>
-    public enum ZIMapMonitor
-    {   /// <summary>Debug information is sent.</summary>
-        Debug,
-        /// <summary>Something that may be of interest is reported.</summary>
-        Info,
-        /// <summary>An error is reported.</summary>
-        Error,
-        /// <summary>
-        /// Used to indicate progress (text arg must contain 0 ... 100).
-        /// </summary>
-        Progress,
-        /// <summary>
-        /// Used to indicate an EXISTS server response, e.g. thats the number of
-        /// messages in a mailbox has changed (text arg must contain 0 ... 100).
-        /// </summary>
-        Messages
-    }
-    
-    //==========================================================================
     // ZIMapException class    
     //==========================================================================
     /// <summary>
@@ -136,6 +24,52 @@ namespace ZIMap
     /// </summary>
     public class ZIMapException : ApplicationException
     {
+        /// <summary>
+        /// Error codes used to throw an exception, see <see cref="ZIMapException"/>
+        /// </summary>
+        /// <remarks>
+        /// Usually some additional text to describe the problem is passed along
+        /// with <see cref="ZIMapException"/>
+        /// </remarks>
+        public enum Error {
+            /// <summary>No error has occured (used as flag)</summary>
+            NoError,    // must be first
+            
+            /// <summary>Cannot map the protocol name to the port number</summary>
+            UnknownProtocol,
+            /// <summary>Cannot connect to server</summary>
+            CannotConnect,
+            /// <summary>The server sent an unexpected tag that we don't understand</summary>
+            UnexpectedTag,
+            /// <summary>Could not receive data from server</summary>
+            ReceiveFailed,
+            /// <summary>The server sent data with a syntax that we don't understand</summary>
+            UnexpectedData,
+            /// <summary>Could not send data to the server</summary>
+            SendFailed,
+            /// <summary>Failed to close the connenction (exception in clean-up)</summary>
+            CloseFailed,
+            /// <summary>Attempt to use a ZIMapCommand after Dispose()</summary>
+            DisposedObject,
+            /// <summary>ZIMapCommand was queued but not yet answered</summary>
+            CommandBusy,
+            /// <summary>Cannot perform ZIMapCommand request in this state</summary>
+            CommandState,
+            /// <summary>Somthing that is not implemented was requested</summary>
+            NotImplemented,
+            /// <summary>A method was called with an inavalid argument</summary>
+            InvalidArgument,
+            /// <summary>Invalid argument, value must be 0 or null</summary>
+            MustBeZero,
+            /// <summary>Invalid argument, value cannot be 0 or null</summary>
+            MustBeNonZero,
+            /// <summary>Something unexpected has happened</summary>
+            Unexpected,
+            
+            /// <summary>Unknow error (was an invalid error code)</summary>
+            Unknown     // must be last
+        };
+
         /// <summary>
         /// Array to map ZIMapErrorCode to messages texts 
         /// </summary>
@@ -161,23 +95,23 @@ namespace ZIMap
             /*Unknown*/ "Unknown error"     // must be last
         };
 
-        public readonly ZIMapErrorCode ErrorCode;
+        /// <summary>A <see cref="Error"/> value set by the constructor.</summary>
+        public readonly Error   ErrorCode;
         
-        public static string MessageFromCode(ZIMapErrorCode code)
-        {   if(code < ZIMapErrorCode.NoError || code > ZIMapErrorCode.Unknown)
-                code = ZIMapErrorCode.Unknown;
+        public static string MessageFromCode(Error code)
+        {   if(code < Error.NoError || code > Error.Unknown) code = Error.Unknown;
             return ErrorMessages[(int)code];
         }
         
-        public ZIMapException(ZIMapErrorCode code) : base(MessageFromCode(code))
+        public ZIMapException(Error code) : base(MessageFromCode(code))
         {   ErrorCode = code; 
         }
 
-        public ZIMapException(ZIMapErrorCode code, string message) : base(message)
+        public ZIMapException(Error code, string message) : base(message)
         {   ErrorCode = code; 
         }
 
-        public ZIMapException(ZIMapErrorCode code, Exception inner) : base(MessageFromCode(code), inner)
+        public ZIMapException(Error code, Exception inner) : base(MessageFromCode(code), inner)
         {   ErrorCode = code; 
         }
 
@@ -188,13 +122,13 @@ namespace ZIMap
         /// The parent connection or <c>null</c> if unknown.
         /// </param>
         /// <param name="code">
-        /// The error code <see cref="ZIMapErrorCode"/>
+        /// The error code <see cref="ZIMapException.ErrorCode"/>
         /// </param>
         /// <param name="arg1">
         /// <c>null</c> for no info, an Exception object as inner exception or any other
         /// object (ToString will be called).
         /// </param>
-        public static void Throw(ZIMapConnection conn, ZIMapErrorCode code, object arg1)
+        public static void Throw(ZIMapConnection conn, Error code, object arg1)
         {   ZIMapException err;
             if(arg1 == null)
                err = new ZIMapException(code);
@@ -224,7 +158,7 @@ namespace ZIMap
         // usually of type ZIMapConnection
         private readonly ZIMapBase      parent;
         // log level for the instance
-        private          ZIMapMonitor   level = ZIMapMonitor.Error;
+        private          ZIMapConnection.Monitor level = ZIMapConnection.Monitor.Error;
             
         /// <summary>
         /// This constructor is the only way to set the parent field.
@@ -243,17 +177,52 @@ namespace ZIMap
         /// Hook for sending error and debug messages or to inform of 
         /// status changes.
         /// </summary>
-        /// <param name="item">
-        /// <see cref="ZIMapMonitor"/> indicates the type of message.
+        /// <param name="level">
+        /// <see cref="ZIMapConnection.Monitor"/> indicates the importance of the message.
         /// </param>
         /// <param name="message">
         /// The payload.
         /// </param>
         /// <remarks>Implementing this in a derived class gives the implementor
-        /// full control about the message disposal (see also <see cref="MonitorLevel"/>).
+        /// full control about the message output.  Usually the implementation
+        /// will just call
+        /// <see cref="ZIMapConnection.MonitorInvoke(ZIMapConnection.Monitor, string)"/>.
+        /// <para />
+        /// Messages will only be processed if <paramref name="level"/> is less
+        /// or equal to <see cref="MonitorLevel"/>).
         /// </remarks>
-        protected abstract void Monitor(ZIMapMonitor item, string message);
+        protected abstract void MonitorInvoke(ZIMapConnection.Monitor level, string message);
 
+        [System.Diagnostics.Conditional("DEBUG")]
+        protected void MonitorDebug(string message)
+        {   if(level > ZIMapConnection.Monitor.Debug) return;
+            MonitorInvoke(ZIMapConnection.Monitor.Debug, message);
+        }
+
+        [System.Diagnostics.Conditional("DEBUG")]
+        protected void MonitorDebug(string message, params object[] args)
+        {   if(level > ZIMapConnection.Monitor.Debug) return;
+            MonitorInvoke(ZIMapConnection.Monitor.Debug, string.Format(message, args));
+        }
+        
+        protected void MonitorInfo(string message)
+        {   if(level > ZIMapConnection.Monitor.Info) return;
+            MonitorInvoke(ZIMapConnection.Monitor.Info, message);
+        }
+        
+        protected void MonitorInfo(string message, params object[] args)
+        {   if(level > ZIMapConnection.Monitor.Info) return;
+            MonitorInvoke(ZIMapConnection.Monitor.Info, string.Format(message, args));
+        }
+        
+        protected void MonitorError(string message)
+        {   MonitorInvoke(ZIMapConnection.Monitor.Error, message);
+        }
+        
+        protected void MonitorError(string message, params object[] args)
+        {   MonitorInvoke(ZIMapConnection.Monitor.Error, string.Format(message, args));
+        }
+        
         /// <summary>
         /// Report an error via callback and/or <see cref="ZIMapException"/>.
         /// </summary>
@@ -269,7 +238,7 @@ namespace ZIMap
         /// taken as 'inner exception'. For all other object types the
         /// result of ToString() is forwarded.
         /// </remarks>
-        protected void Error(ZIMapErrorCode code, object info)
+        protected void RaiseError(ZIMapException.Error code, object info)
         {   ZIMapConnection conn = parent as ZIMapConnection;
             ZIMapException.Throw(conn, code, info);
         }
@@ -283,7 +252,7 @@ namespace ZIMap
         /// <remarks>
         /// Consider using another overload to pass additional error information.
         /// </remarks>
-        protected void Error(ZIMapErrorCode code)
+        protected void RaiseError(ZIMapException.Error code)
         {   ZIMapConnection conn = parent as ZIMapConnection;
             ZIMapException.Throw(conn, code, null);
         }
@@ -305,20 +274,20 @@ namespace ZIMap
         
         /// <summary>
         /// Allows to control the amount of debug output generated by
-        /// <see cref="Monitor"/>
+        /// <see cref="MonitorInvoke"/>
         /// </summary>
         /// <value>
         /// Set/get the level down to which a call to Monitor generates output.
         /// </value>
         /// <remarks>
-        /// The default value is <see cref="ZIMapMonitor.Info"/>. The only 
+        /// The default value is <see cref="ZIMapConnection.Monitor.Info"/>. The only 
         /// accepted values are ZIMapMonitor.Debug, ZIMapMonitor.Info and
         /// ZIMapMonitor.Error - other values are silently ignored.
         /// </remarks>
-        public ZIMapMonitor MonitorLevel
+        public ZIMapConnection.Monitor MonitorLevel
         {   get {   return level; }
-            set {   if(level >= ZIMapMonitor.Debug &&
-                       level <= ZIMapMonitor.Error) level = value; 
+            set {   if(level >= ZIMapConnection.Monitor.Debug &&
+                       level <= ZIMapConnection.Monitor.Error) level = value; 
                 }
         }
     }
@@ -327,30 +296,6 @@ namespace ZIMap
     // ZIMapParser class    
     //==========================================================================
 
-    /// <summary>
-    /// Describes the type of a RFC3501 token, see ZIMapParser.Token .
-    /// </summary>
-    /// <remarks>
-    /// There are more token types defined by RFC3501 but for the purpose of
-    /// this library the types described here are sufficient.
-    /// </remarks>
-    public enum ZIMapParserData
-    {   /// <summary>Not valid, initial state.</summary>
-        Void,
-        /// <summary>The token is an <c>uint</c> number.</summary>
-        Number,
-        /// <summary>The token data is simple text.</summary>
-        Text,
-        /// <summary>The token data is quoted text.</summary>
-        Quoted,
-        /// <summary>This token represents a [] list or tokens</summary>
-        Bracketed,
-        /// <summary>Gives the size of a literal</summary>
-        Literal,
-        /// <summary>This token represents a () list of tokens</summary>
-        List
-    }
-    
     /// <summary>
     /// A parser for RFC3501 (imap) server replies.
     /// </summary>
@@ -362,11 +307,35 @@ namespace ZIMap
     public class ZIMapParser
     {
         /// <summary>
+        /// Describes the type of a RFC3501 token, see ZIMapParser.Token .
+        /// </summary>
+        /// <remarks>
+        /// There are more token types defined by RFC3501 but for the purpose of
+        /// this library the types described here are sufficient.
+        /// </remarks>
+        public enum TokenType
+        {   /// <summary>Not valid, initial state.</summary>
+            Void,
+            /// <summary>The token is an <c>uint</c> number.</summary>
+            Number,
+            /// <summary>The token data is simple text.</summary>
+            Text,
+            /// <summary>The token data is quoted text.</summary>
+            Quoted,
+            /// <summary>This token represents a [] list or tokens</summary>
+            Bracketed,
+            /// <summary>Gives the size of a literal</summary>
+            Literal,
+            /// <summary>This token represents a () list of tokens</summary>
+            List
+        }
+    
+        /// <summary>
         /// Token usually returned by <see cref="ZIMapParser"/>.
         /// </summary>
         public class Token
-        {   private object          data;   
-            private ZIMapParserData type;
+        {   private object      data;   
+            private TokenType   type;
             
             /// <summary>
             /// The only xtor to create a token.
@@ -385,7 +354,7 @@ namespace ZIMap
             /// Tokens of type <c>Numeric</c> that cannot be represented as an <c>uint</c>
             /// are silently converted to <c>Text</c> tokens.
             /// </remarks>
-            public Token(object data, ZIMapParserData type)
+            public Token(object data, TokenType type)
             {
                 this.type = type;
                 if(!(data is string))
@@ -395,15 +364,15 @@ namespace ZIMap
 
                 // make Text and single char token intern ...
                 string text = (string)data;
-                if(type == ZIMapParserData.Text || text.Length == 1)
+                if(type == TokenType.Text || text.Length == 1)
                     this.data = string.Intern(text);
                 // try to use uint for Number and Literal
-                else if(type == ZIMapParserData.Number || type == ZIMapParserData.Literal)
+                else if(type == TokenType.Number || type == TokenType.Literal)
                 {   uint uval;
                     if(uint.TryParse(text, out uval))
                         this.data = uval;
                     else
-                    {   this.type = ZIMapParserData.Text;
+                    {   this.type = TokenType.Text;
                         this.data = text;
                     }
                 }
@@ -424,9 +393,9 @@ namespace ZIMap
             /// <summary>Returns information on the token's type.</summary>
             /// <remarks>Each token has a type that is stored in a 
             /// seperate field.</remarks>
-            /// <value>A value from the <see cref="ZIMapParserData"/> enumeration.
+            /// <value>A value from the <see cref="ZIMapParser.TokenType"/> enumeration.
             /// </value>
-            public ZIMapParserData Type 
+            public TokenType Type 
             {   get { return type; } 
             }
             
@@ -455,11 +424,11 @@ namespace ZIMap
             /// translation to text.</remarks>
             public string Text 
             {   get {   if(data == null) return "";
-                        if(type != ZIMapParserData.List) 
+                        if(type != TokenType.List) 
                             return data.ToString();
                         StringBuilder sb = new StringBuilder();
                         foreach(Token t in (Token[])data)
-                        {   if(sb.Length > 1 && t.type != ZIMapParserData.Bracketed)
+                        {   if(sb.Length > 1 && t.type != TokenType.Bracketed)
                                 sb.Append(' ');
                             sb.Append(t.ToString());
                         }
@@ -470,10 +439,10 @@ namespace ZIMap
             /// <summary>Returns the text of a quoted string or <c>null</c></summary>
             /// <value>The unquoted string</value>
             /// <remarks> This property returns <c>null</c> if the token is not
-            /// of type <see cref="ZIMapParserData.Quoted"/>.  This can be used
+            /// of type <see cref="TokenType.Quoted"/>.  This can be used
             /// to distinguisch <c>NIL</c> values from quoted text.</remarks>
             public string QuotedText
-            {   get {   if(data == null || type != ZIMapParserData.Quoted)
+            {   get {   if(data == null || type != TokenType.Quoted)
                             return null;
                         return (string)data;
                     }
@@ -482,7 +451,7 @@ namespace ZIMap
             /// <summary>Returns a token array for a List token</summary>
             /// <value>The array or <c>null</c> if the token is not a List</value>
             public Token[] List 
-            {   get {   if(type != ZIMapParserData.List) return null; 
+            {   get {   if(type != TokenType.List) return null; 
                         return (Token[])data; 
                     } 
             }
@@ -494,19 +463,19 @@ namespace ZIMap
             /// </remarks>
             public override string ToString()
             {   if(data == null) return "";
-                if(type == ZIMapParserData.List)
+                if(type == TokenType.List)
                 {   StringBuilder sb = new StringBuilder("(");
                     sb.Append(Text);
                     sb.Append(')');
                     return sb.ToString();
                 }
-                else if(type == ZIMapParserData.Bracketed)
+                else if(type == TokenType.Bracketed)
                 {   return string.Format("[{0}]", (string)data);
                 }
-                else if(type == ZIMapParserData.Literal)
+                else if(type == TokenType.Literal)
                 {   return string.Format("{{{0}}}", Number);
                 }
-                else if(type == ZIMapParserData.Quoted)
+                else if(type == TokenType.Quoted)
                 {   string tout;
                     ZIMapConverter.QuotedString(out tout, (string)data, true);
                     return tout;
@@ -533,7 +502,7 @@ namespace ZIMap
         
         // helper used for lists
         private void Parse(string message, ref int start)
-        {   ZIMapParserData state = ZIMapParserData.Void;
+        {   TokenType state = TokenType.Void;
             bool skip = false;
             StringBuilder sb = new StringBuilder();
 
@@ -543,20 +512,20 @@ namespace ZIMap
             {   char curr = (idx >= len) ? ' ' : message[idx];
                 
                 switch(state) 
-                {   case ZIMapParserData.Void:
+                {   case TokenType.Void:
                             if(curr == ' ')
                                 continue;
                             skip = false; sb.Length = 0;
                             if(curr == '"')
-                                state = ZIMapParserData.Quoted;
+                                state = TokenType.Quoted;
                             else if(curr >= '0' && curr <= '9')
-                            {   state = ZIMapParserData.Number;
+                            {   state = TokenType.Number;
                                 sb.Append(curr);
                             }
                             else if(curr == '(')
                             {   idx++;
                                 List<Token> list = new ZIMapParser(message, ref idx).tokens;
-                                tokens.Add(new Token(list.ToArray(), ZIMapParserData.List));
+                                tokens.Add(new Token(list.ToArray(), TokenType.List));
                                 idx--;                          // should be ')'
                                 continue;
                             }
@@ -564,58 +533,58 @@ namespace ZIMap
                             {   len=0; break;
                             }
                             else if(curr == '{')
-                                state = ZIMapParserData.Literal;
+                                state = TokenType.Literal;
                             else if(curr == '[')
-                                state = ZIMapParserData.Bracketed;
+                                state = TokenType.Bracketed;
                             else
-                            {   state = ZIMapParserData.Text;
+                            {   state = TokenType.Text;
                                 sb.Append(curr);
                             }
                             break;
 
-                    case  ZIMapParserData.Bracketed:
+                    case  TokenType.Bracketed:
                             if(curr == ']')
                             {   tokens.Add(new Token(sb.ToString(), state));
-                                state = ZIMapParserData.Void;
+                                state = TokenType.Void;
                                 continue;
                             }
                             sb.Append(curr);
                             break;
 
-                    case  ZIMapParserData.Literal:
+                    case  TokenType.Literal:
                             if(curr == '}')
                             {   tokens.Add(new Token(sb.ToString(), state));
-                                state = ZIMapParserData.Void;
+                                state = TokenType.Void;
                                 continue;
                             }
                             if(curr < '0' || curr > '9')
-                                state = ZIMapParserData.Text;
+                                state = TokenType.Text;
                             sb.Append(curr);
                             break;
 
-                    case  ZIMapParserData.Number:
+                    case  TokenType.Number:
                             if(curr == ')' || curr == ']')
                             {   curr  = ' '; idx--;
                             }
                             if(curr == ' ' || curr == '[')
                             {   tokens.Add(new Token(sb.ToString(), state));
-                                state = ZIMapParserData.Void;
+                                state = TokenType.Void;
                                 if(curr == '[') idx--;
                                 continue;
                             }
                             if(curr < '0' || curr > '9')
-                                state = ZIMapParserData.Text;
+                                state = TokenType.Text;
                             sb.Append(curr);
                             break;
                     
-                    case  ZIMapParserData.Quoted:
+                    case  TokenType.Quoted:
                             if(skip)
                                 skip = false;
                             else if(curr == '\\')
                                 skip = true; 
                             else if(curr == '"')
                             {   tokens.Add(new Token(sb.ToString(), state));
-                                state = ZIMapParserData.Void;
+                                state = TokenType.Void;
                             }
                             else
                                 sb.Append(curr);
@@ -627,7 +596,7 @@ namespace ZIMap
                             }
                             if(curr == ' ' || curr == '[')
                             {   tokens.Add(new Token(sb.ToString(), state));
-                                state = ZIMapParserData.Void;
+                                state = TokenType.Void;
                                 if(curr == '[') idx--;
                                 continue;
                             }
@@ -666,13 +635,13 @@ namespace ZIMap
             sb.AppendFormat("ZIMapParser: {0} tokens", tokens.Length);
             foreach(Token tok in tokens)
             {   string text;
-                if(tok.Type == ZIMapParserData.List)
+                if(tok.Type == TokenType.List)
                     text = String.Format("List ({0} items)", tok.List.Length);
                 else
                     text = tok.Text;
                 sb.AppendFormat("\n         {0}.{1}  type={2}  text='{3}'",
                                 level, cnt++, tok.Type, text);
-                if(tok.Type == ZIMapParserData.List)
+                if(tok.Type == TokenType.List)
                 {   sb.AppendLine();
                     Dump(sb, level+1, tok.List);
                 }

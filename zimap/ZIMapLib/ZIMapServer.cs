@@ -88,7 +88,7 @@ namespace ZIMap
             ServerType = type;
             ServerSubtype = subtype;
             MonitorLevel = factory.MonitorLevel;
-            Monitor(ZIMapMonitor.Info, "Server is: " + type + "   subtype is:" + subtype);
+            MonitorInfo( "Server is: " + type + "   subtype is:" + subtype);
         }
             
         private class Default : ZIMapServer
@@ -97,9 +97,9 @@ namespace ZIMap
         }
             
         // must implement, abstract in base ...
-        protected override void Monitor(ZIMapMonitor level, string message)
+        protected override void MonitorInvoke(ZIMapConnection.Monitor level, string message)
         {   if(MonitorLevel <= level) 
-                ZIMapConnection.Monitor(Parent, "ZIMapServer", level, message); 
+                ZIMapConnection.MonitorInvoke(Parent, "ZIMapServer", level, message); 
         }
             
         //======================================================================
@@ -215,7 +215,7 @@ namespace ZIMap
             {   string list = NamespaceList(item);
                 if(list != null)
                 {   ZIMapParser parser = new ZIMapParser(list);
-                    if(parser.Length > 0 && parser[0].Type == ZIMapParserData.List)
+                    if(parser.Length > 0 && parser[0].Type == ZIMapParser.TokenType.List)
                     {   ZIMapParser.Token[] toks = parser[0].List;
                         if(toks.Length > 0)
                             namespdata[item].Prefix = toks[0].Text;
@@ -243,19 +243,6 @@ namespace ZIMap
             return namespdata[item];
         }
         
-        
-        /// <summary>
-        /// Get the mailbox name of the current user 
-        /// </summary>
-        /// <returns>
-        /// A fully qualified mailbox name
-        /// </returns>
-        public virtual string MyMailboxNameX()
-        {   string name = NamespaceDataUser.Prefix + "INBOX";
-            if(name == "INBOX.INBOX") name = "INBOX";
-            return name;
-        }
-
         /// <summary>
         /// Make sure that filter and qualifier can be passed to IMap LIST
         /// </summary>
@@ -381,6 +368,30 @@ namespace ZIMap
                 if(qualifier == NamespaceDataShared.Qualifier) return Shared;
             }
             return Nothing;
+        }
+        
+        /// <summary>
+        /// Get rid of INBOX and prefix personal mailboxes with the account name. 
+        /// </summary>
+        /// <returns>
+        /// A friendly mailbox name for display purposes.  The IMap server will not
+        /// allways understand this name.
+        /// <para />
+        /// The returned namespace index is always valid and can be passed safely
+        /// to <see cref="NamespaceData"/> for exmple to get the namspace prefix.
+        /// </returns>
+        public string FriendlyName(string mailbox, out uint nsIndex)
+        {   // the returned index is always valid
+            nsIndex = FindNamespaceIndex(mailbox, true);
+            
+            string pref = NamespaceData(nsIndex).Qualifier;
+            if(pref == "") 
+            {   pref = Factory.User;
+                if(string.IsNullOrEmpty(pref)) return mailbox;
+            }
+
+            if(mailbox == "INBOX") return pref;
+            return pref + NamespaceData(nsIndex).Delimiter + mailbox;
         }
     }
 }

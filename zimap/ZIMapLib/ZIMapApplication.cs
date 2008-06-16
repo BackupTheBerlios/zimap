@@ -25,22 +25,25 @@ namespace ZIMap
     /// The application layer is the top-most of the four ZIMapLib layers. The others
     /// are the command, the protocol and the transport layers.
     /// </remarks>
-    public class ZIMapApplication
+    public class ZIMapApplication : ZIMapBase
     {
         public readonly string  ServerName;
         public readonly uint    ServerPort;
         
-        private ZIMapConnection connection;        
+        private ZIMapConnection connection;
         private ZIMapFactory    factory;
         private ZIMapServer     server;
         private ZIMapExport     export;
             
         private string          username;
         private uint            timeout = 30;
-        private ZIMapMonitor    monitorLevel = ZIMapMonitor.Error;
+        private ZIMapConnection.Monitor
+                                monitorLevel = ZIMapConnection.Monitor.Error;
         private bool            monitorAll = false;
+        private ZIMapConnection.Progress
+                                progress;
+        
         private uint            fetchBlock = 50;
-        private uint            progress = 100;
         private uint            exportSerial;
         
         // feature flags ...
@@ -50,7 +53,6 @@ namespace ZIMap
         private bool            enableUid = true;
 
         private bool            enableMessages;
-        private bool            enableProgress;
             
         // see OpenMailbox ...
         private string          mailboxName;
@@ -63,11 +65,6 @@ namespace ZIMap
         
         public ZIMapConnection Connection
         {   get {   return connection;  }
-        }
-
-        public bool EnableProgressReporting
-        {   get {   return enableProgress;  }
-            set {   enableProgress = value; }
         }
 
 // TODO: implement EnableMessagesReporting        
@@ -171,15 +168,11 @@ namespace ZIMap
         {   get {    return mailboxReadonly; }
         }
         
-        public ZIMapMonitor MonitorLevel
+        public new ZIMapConnection.Monitor MonitorLevel
         {   get {   return monitorLevel;  }
             set {   SetMonitorLevel(value, false);  }
         }
 
-        public uint Progress
-        {   get {   return progress; }
-        }
-        
         public ZIMapServer Server
         {   get {   if(server == null) 
                         server = ZIMapServer.Create(factory, EnableNamespaces);   
@@ -211,47 +204,29 @@ namespace ZIMap
         public ZIMapApplication(string server, string protocol) :
             this(server, ZIMapConnection.GetIMapPort(protocol)) {}
 
-        public ZIMapApplication(string server, uint port)
+        public ZIMapApplication(string server, uint port) : base(null)
         {   ServerName = server; ServerPort = port;  
+        }
+            
+        // must implement, abstract in base ...
+        protected override void MonitorInvoke(ZIMapConnection.Monitor level, string message)
+        {   if(MonitorLevel <= level)
+                ZIMapConnection.MonitorInvoke(connection, "ZIMapFactory", level, message); 
         }
 
         // =====================================================================
         // Debug stuff
         // =====================================================================
         
-        public void MonitorProgress(uint percent)
-        {   if(percent > 100) percent = 100;
-            if(percent <= progress && percent > 0) return;
-            progress = percent;
-            if(!enableProgress) return;
-            ZIMapConnection.Monitor(factory, "ZIMapApplication", ZIMapMonitor.Progress, percent.ToString());
-        }
-        
-        public void MonitorError(string message)
-        {   if(progress != 100) MonitorProgress(100);
-            if(string.IsNullOrEmpty(message)) return;
-            ZIMapConnection.Monitor(factory, "ZIMapApplication", ZIMapMonitor.Error, message);
-        }
-        
-        public void MonitorInfo(string message)
-        {   if(string.IsNullOrEmpty(message)) return;
-            if(monitorLevel <= ZIMapMonitor.Info)
-                ZIMapConnection.Monitor(factory, "ZIMapApplication", ZIMapMonitor.Info, message);
-        }
-        
-        public void MonitorDebug(string message)
-        {   if(monitorLevel <= ZIMapMonitor.Debug)
-                ZIMapConnection.Monitor(factory, "ZIMapApplication", ZIMapMonitor.Info, message);
-        }
-        
-        public void SetMonitorLevel(ZIMapMonitor level, bool allLayers)
-        {   if(level > ZIMapMonitor.Error) return;
+        public void SetMonitorLevel(ZIMapConnection.Monitor level, bool allLayers)
+        {   if(level > ZIMapConnection.Monitor.Error) return;
             monitorLevel = level;
             monitorAll = allLayers;
             if(factory == null) return;
             factory.MonitorLevel = level;
             factory.Connection.MonitorLevel = level;
-            if(!allLayers && level != ZIMapMonitor.Error) level = ZIMapMonitor.Info; 
+            if(!allLayers && level != ZIMapConnection.Monitor.Error)
+                level = ZIMapConnection.Monitor.Info; 
             factory.Connection.TransportLayer.MonitorLevel = level;
             factory.Connection.ProtocolLayer.MonitorLevel = level;
         }
@@ -276,14 +251,15 @@ namespace ZIMap
         public bool Connect(string user, string password, ZIMapConnection.TlsModeEnum tlsMode)
         {
             // step 1: Open a new connection and get factory ...
-            MonitorProgress(0);
+            ZIMapConnection.ProgressUpdate(null, 0);
             if(connection != null) Disconnect();
 
             connection = ZIMapConnection.GetConnection(ServerName, ServerPort,
                                                        tlsMode, timeout);
             if(connection != null)
             {   connection.MonitorLevel = MonitorLevel;
-                MonitorProgress(20);
+                progress = connection.ProgressReporting;
+                progress.Update(20);
                 factory = connection.CommandLayer;
             }
             if(factory == null)
@@ -298,16 +274,16 @@ namespace ZIMap
             // step 2: login
             string greeting = connection.ProtocolLayer.ServerGreeting;
             MonitorInfo("Connect: server greeting: " + greeting);
-            MonitorProgress(40);
+            progress.Update(40);
             
             ZIMapCommand.Login cmd = new ZIMapCommand.Login(factory);
             cmd.Queue(user, password);
-            if(!cmd.Data.Succeeded)
+            if(!cmd.CheckSuccess())
             {   MonitorError("Connect: login failed");
                 return false;
             }
             username = user;
-            MonitorProgress(60);
+            progress.Update(60);
             
             // set 3: get server configuration
 
@@ -317,7 +293,7 @@ namespace ZIMap
             CheckCapability("QUOTA",     false, ref enableQuota);
             CheckCapability("ACL",       false, ref enableRights);
             CheckCapability("UIDPLUS",   bIMap, ref enableUid);
-            MonitorProgress(80);
+            progress.Update(80);
             
             // step4: get Namespace info
             if(enableNamespaces)
@@ -327,8 +303,9 @@ namespace ZIMap
                 {   MonitorInfo("Connect: NAMESPACE disabled (not supported)");
                     enableNamespaces = false;
                 }
+                factory.HierarchyDelimiter = server.DefaultDelimiter;
             }
-            MonitorProgress(100);
+            progress.Done();
             return true;
         }
         
@@ -398,7 +375,7 @@ namespace ZIMap
             ZIMapCommand.List cmdList = 
                 (ZIMapCommand.List)factory.CreateByName((subscribed == 2) ? "LSUB" : "LIST");
             if(cmdList == null) return null;
-            MonitorProgress(0);
+            progress.Update(0);
 
             ZIMapCommand.Lsub cmdLSub = null;
             if(subscribed == 1) cmdLSub = new ZIMapCommand.Lsub(factory); 
@@ -409,7 +386,7 @@ namespace ZIMap
             // send the commands ...
             cmdList.Queue(qualifier, filter);            
             if(cmdLSub != null) cmdLSub.Queue(qualifier, filter);
-            MonitorProgress(5);
+            progress.Update(5);
             
             // wait for the mailbox list ...            
             ZIMapCommand.List.Item[] items = cmdList.Items;
@@ -418,7 +395,7 @@ namespace ZIMap
             {   MonitorError("Mailboxes: got no mailboxes");
                 return null;
             }
-            MonitorProgress(15);
+            progress.Update(15);
             
             // create mailbox data ...
             MailBox[] mbox = new MailBox[items.Length];
@@ -439,8 +416,8 @@ namespace ZIMap
             // get subscription info ...
             if(cmdLSub != null)
             {   items = cmdLSub.Items;
-                MonitorProgress(20);
-                if(!cmdLSub.Data.Succeeded)
+                progress.Update(20);
+                if(!cmdLSub.CheckSuccess())
                     MonitorError("Mailboxes: got no subscription info");
                 else if(items != null)
                 {   int icur = 0;
@@ -460,15 +437,16 @@ namespace ZIMap
 
             // fetch details ...
             if(!detailed)
-            {   MonitorProgress(100);
+            {   progress.Done();
                 return mbox;
             }
             items = null;
             MonitorInfo("Mailboxes: Fetching " + irun + " details");
-            MonitorProgress(25);
+            progress.Update(25);
             
             factory.ExecuteCommands(true);
             ZIMapCommand[] cmds = factory.CompletedCommands;
+            progress.Push(30, 100);
             
             foreach(ZIMapCommand c in cmds)
             {   ZIMapCommand.Examine cmd = c as ZIMapCommand.Examine;
@@ -478,11 +456,12 @@ namespace ZIMap
                 mbox[irun].Recent   = cmd.Recent;
                 mbox[irun].Unseen   = cmd.Unseen;
                 mbox[irun].Flags    = cmd.Flags;
-                uint prog = 30 + (uint)((irun * 70.0) / mbox.Length);
-                MonitorProgress(Math.Min(prog, 99)); 
+                progress.Update((uint)irun, (uint)mbox.Length); 
             }
+            
+            progress.Pop();
             factory.DisposeCommands(null, false);
-            MonitorProgress(100);
+            progress.Done();
             return mbox;
         }
          
@@ -506,7 +485,7 @@ namespace ZIMap
                 Size    = item.Size;
                 Parts   = item.Parts;
                 Flags   = item.Flags;
-                Literal = item.Literal;
+                Literal = item.Literal(0);
                 UserData= null;
             }
         }
@@ -522,11 +501,11 @@ namespace ZIMap
 
             ZIMapCommand.Fetch fetch = new ZIMapCommand.Fetch(factory);
             if(fetch == null) return null;
-            MonitorProgress(0);
+            progress.Update(0);
 
             uint count = lastIndex - firstIndex;
             uint block = fetchBlock;
-            uint progress = 0;
+            uint progrcnt = 0;
             uint progrmax = count;
             List<MailInfo> items = null;
             ZIMapCommand.Fetch.Item[] part = null;
@@ -539,32 +518,29 @@ namespace ZIMap
 
                 // semi logarithmic progress ...
                 if(lastIndex == uint.MaxValue)
-                {   if(progress < 32*16)
-                        progress += 64;
-                    else if(progress < 64*16)
-                        progress += 16;
-                    else if(progress < 99)
-                        progress += 1;
-                    MonitorProgress(progress / 16);
+                {   if(progrcnt < 32*16)
+                        progrcnt += 64;
+                    else if(progrcnt < 64*16)
+                        progrcnt += 16;
+                    else if(progrcnt < 99)
+                        progrcnt += 1;
+                    progress.Update(progrcnt / 16);
                 }
                 // exact progress ...
                 else
-                {   progress += block;
-                    double cent = (progress * 100.0) / progrmax;
-                    uint cval = (uint)cent;
-                    if(cval > 99) cval = 99;
-                    MonitorProgress(cval);
+                {   progrcnt += block;
+                    progress.Update(progrcnt, progrmax);
                 }
                 
                 part = fetch.Items;
                 if(part == null)
-                {   if(fetch.Data.Succeeded)
+                {   if(fetch.CheckSuccess())
                         break;                      // server said: OK no more data
-                    if(fetch.Data.ReceiveState == ZIMapReceiveState.Error && items != null)
+                    if(fetch.Result.State == ZIMapProtocol.ReceiveState.Error && items != null)
                         break;                      // server said: BAD no more data
-                    if(fetch.Data.ReceiveState == ZIMapReceiveState.Failure)
+                    if(fetch.Result.State == ZIMapProtocol.ReceiveState.Failure)
                         break;                      // server said: No no matching data
-                    MonitorError("MailHeaders: FETCH failed: " + fetch.Data.Message);
+                    MonitorError("MailHeaders: FETCH failed: " + fetch.Result.Message);
                     factory.DisposeCommands(null, false);
                     return null;
                 }
@@ -585,7 +561,7 @@ namespace ZIMap
             MailInfo[] rval = null;
             if     (items != null) rval = items.ToArray();
             else if(part == null)  rval = new MailInfo[0];
-            MonitorProgress(100);
+            progress.Done();
             MonitorInfo("MailHeaders: Got " + rval.Length + " mails");
             return rval;
         }
@@ -615,7 +591,7 @@ namespace ZIMap
 
             ZIMapCommand.Fetch fetch = new ZIMapCommand.Fetch(factory);
             if(fetch == null) return null;
-            MonitorProgress(0);
+            progress.Update(0);
             fetch.UidCommand = enableUid;
 
             uint count = (uint)ids.Length;
@@ -625,10 +601,10 @@ namespace ZIMap
             
             if(count <= block)
             {   fetch.Queue(ids, what);
-                MonitorProgress(20);
+                progress.Update(20);
                 part = fetch.Items;
                 if(part == null)
-                {   MonitorError("MailHeaders: FETCH failed: " + fetch.Data.Message);
+                {   MonitorError("MailHeaders: FETCH failed: " + fetch.Result.Message);
                     factory.DisposeCommands(null, false);
                     return null;
                 }
@@ -640,7 +616,6 @@ namespace ZIMap
             {   List<MailInfo> items = new List<MailInfo>();
                 uint last = 0;
                 uint offs = 0;
-                uint progress;
                 uint[] sub = null;
                 while(count > 0)
                 {   uint chunk = Math.Min(count, block);
@@ -649,14 +624,12 @@ namespace ZIMap
                         last = chunk;
                     }
                     Array.Copy(ids, offs, sub, 0, chunk);
-
-                    progress = (uint)((offs * 100.0) / ids.Length); 
-                    MonitorProgress(Math.Min(progress, 99));
+                    progress.Update(offs, (uint)ids.Length);
                     fetch.Queue(sub, what);
 
                     part = fetch.Items;
                     if(part == null)
-                    {   MonitorError("MailHeaders: FETCH failed: " + fetch.Data.Message);
+                    {   MonitorError("MailHeaders: FETCH failed: " + fetch.Result.Message);
                         factory.DisposeCommands(null, false);
                         return null;
                     }
@@ -672,7 +645,7 @@ namespace ZIMap
             factory.DisposeCommands(null, false);
             if(rval == null) rval = new MailInfo[0];
             MonitorInfo("MailHeaders: Got " + rval.Length + " mails");
-            MonitorProgress(100);
+            progress.Done();
             return rval;
         }   
       
@@ -727,7 +700,7 @@ namespace ZIMap
         {   info = new MailBox();
             if(factory == null) return false;
 
-            // recent mailbox still valid?
+            // recent mailbox still valid? But not if returnDetails is set... 
             if(mailboxName != null)
             {   if(returnDetails || mailboxReadonly != readOnly || mailboxName != fullName)
                     mailboxName = null;
@@ -735,6 +708,7 @@ namespace ZIMap
                     mailboxName = null;
                 else
                 {   MonitorInfo("MailboxOpen: still valid: " + fullName);
+                    info.Name = fullName;
                     return true;
                 }
             }
@@ -743,11 +717,11 @@ namespace ZIMap
             ZIMapCommand.Select cmd = 
                 (ZIMapCommand.Select)factory.CreateByName(readOnly ? "EXAMINE" : "SELECT");
             if(cmd == null) return false;
-            MonitorProgress(0);
+            progress.Update(0);
             
             cmd.Queue(fullName);
-            if(!cmd.Data.Succeeded)
-            {   MonitorError("MailboxOpen: command failed: " + cmd.Data.Message);
+            if(!cmd.CheckSuccess())
+            {   MonitorError("MailboxOpen: command failed: " + cmd.Result.Message);
                 cmd.Dispose();
                 return false;
             }
@@ -769,7 +743,7 @@ namespace ZIMap
             mailboxReadonly = readOnly;
             mailboxTag = cmd.Tag;
             cmd.Dispose();
-            MonitorProgress(100);
+            progress.Done();
             return true;
         }
         
@@ -786,7 +760,7 @@ namespace ZIMap
             if(!Factory.EnableAutoDispose) waitForResult = true;
             if(!waitForResult) return cmd.Execute(false);
             
-            bool bok = cmd.Data.Succeeded;
+            bool bok = cmd.Result.Succeeded;
             cmd.Dispose();
             return bok;
         }
@@ -855,13 +829,13 @@ namespace ZIMap
             if(cmd == null) return null;
             cmd.UidCommand = enableUid;
 
-            MonitorProgress(0);
+            progress.Update(0);
             cmd.Queue(charset, search, extra);
-            MonitorProgress(5);
+            progress.Update(5);
             
             uint [] matches = cmd.Matches;
             if(matches == null)
-                MonitorError("MailSearch: command failed: " + cmd.Data.Message);
+                MonitorError("MailSearch: command failed: " + cmd.Result.Message);
             else if(matches.Length == 0)
                 MonitorInfo("MailSearch: nothing found");
             else
@@ -869,7 +843,7 @@ namespace ZIMap
             }
             
             cmd.Dispose();
-            MonitorProgress(10);
+            progress.Update(10);
             return this.MailHeaders(matches, what);
         }
         
@@ -879,13 +853,13 @@ namespace ZIMap
             if(cmd == null) return null;
             cmd.UidCommand = enableUid;
 
-            MonitorProgress(0);
+            progress.Update(0);
             cmd.Queue(charset, search, extra);
-            MonitorProgress(90);
+            progress.Update(90);
             
             uint [] matches = cmd.Matches;
             if(matches == null)
-                MonitorError("MailSearch: command failed: " + cmd.Data.Message);
+                MonitorError("MailSearch: command failed: " + cmd.Result.Message);
             else if(matches.Length == 0)
                 MonitorInfo("MailSearch: nothing found");
             else
@@ -893,7 +867,7 @@ namespace ZIMap
             }
             
             cmd.Dispose();
-            MonitorProgress(100);
+            progress.Done();
             return matches;
         }
             
@@ -997,7 +971,7 @@ namespace ZIMap
             ZIMapCommand.GetQuotaRoot gqr = new ZIMapCommand.GetQuotaRoot(factory);
             if(gqr == null) return false;
             if(!gqr.Queue(mailboxFullName))
-            {   MonitorError("QuotaLimits: command failed: " + gqr.Data.Message);
+            {   MonitorError("QuotaLimits: command failed: " + gqr.Result.Message);
                 gqr.Dispose();
                 return false;
             }
@@ -1014,8 +988,8 @@ namespace ZIMap
                 sb.Append("STORAGE " + storageLimit);
             }
             cmd.Queue(root, sb.ToString());
-            bool bok = cmd.Data.Succeeded;
-            if(!bok) MonitorError("QuotaLimits: command failed: " + cmd.Data.Message);
+            bool bok = cmd.Result.Succeeded;
+            if(!bok) MonitorError("QuotaLimits: command failed: " + cmd.Result.Message);
             cmd.Dispose();
             return bok;
         }
@@ -1027,20 +1001,16 @@ namespace ZIMap
         public ZIMapExport OpenExport(string path, bool allowFile, bool preferVersions)
         {   ZIMapExport expo = Export;
             expo.Versioning = true;
-            exportSerial = expo.Open(path, allowFile, true, allowFile);
+            exportSerial = expo.Open(path, Server.DefaultDelimiter, allowFile, true, true);
             if(exportSerial == 0) return null;              // open failed
             return expo;
         }
         
         public ZIMapExport OpenImport(string path, bool allowFile)
         {   ZIMapExport expo = Export;
-            exportSerial = expo.Open(path, allowFile, false, false);
+            exportSerial = expo.Open(path, Server.DefaultDelimiter, allowFile, false, false);
             if(exportSerial == 0) return null;              // open failed
             return expo;
         }
-        
-        // TODO: ZIMapApplication: RunSequence for progress bar
-        // TODO: ZIMapApplication: Nesting(level, percent) for progress bar
-        
     }
 }

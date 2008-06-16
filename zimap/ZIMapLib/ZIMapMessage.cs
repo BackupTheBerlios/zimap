@@ -32,7 +32,10 @@ namespace ZIMap
         byte[][]        bodyLines;
         uint            posSubject, posDate, posFrom, posTo;
 
-        const byte      SPACE = 32;
+        private const byte              SPACE = 32;
+        private const byte              CR = (byte)'\r';
+        private const byte              LF = (byte)'\n';
+        private static readonly byte[]  CRLF = { CR, LF };
             
         /// <summary>
         /// Reset to object to it's initial state.
@@ -390,13 +393,13 @@ namespace ZIMap
         public static byte[] LineOfBytes(byte[] buffer, ref uint position, bool ignoreX)
         {   if(buffer == null) return null;
             uint uend = (uint)buffer.Length;
-            if(uend == 0 || position >= buffer.Length) return null;
+            if(uend == 0 || position >= uend) return null;
             uend--;
             
             for(uint irun=position; irun <= uend; irun++)
             {   // check for line break or end of buffer
-                if(irun < uend &&
-                   (buffer[irun] != '\r' || buffer[irun+1] != '\n')) continue;
+                if(buffer[irun] != CR) continue;
+                if(irun < uend && buffer[irun+1] != LF) continue;
                 
                 // ok irun points to <cr> of <cr><lf>
                 uint ulen = irun - position;            // size of line
@@ -444,6 +447,44 @@ namespace ZIMap
                 if(bval != kval) return false;
             }
             return true;
+        }
+        
+        
+        /// <summary>
+        /// Checks if a buffer ends with an empty line 
+        /// </summary>
+        /// <param name="data">
+        /// Buffer to be checked, <c>null</c> is ok.
+        /// </param>
+        /// <returns>
+        /// Returns <c>true</c> if two consecutive CR/LF sequence were found.
+        /// </returns>
+        public static bool EndsWithEmptyLine(byte[] data)
+        {   if(data == null || data.Length < 4) return false;
+            uint upos = (uint)data.Length - 4;
+            return (data[upos]   == CRLF[0] && data[upos+1] == CRLF[1] &&
+                    data[upos+2] == CRLF[0] && data[upos+3] == CRLF[1]);
+        }
+        
+
+        public static string AddressParse(string address, bool url)
+        {
+            // blabla <x@x>
+            // x@y (blabla)
+            if(address == null || address.Length < 3) return address;
+            int ilas = address.Length - 1;
+            if(address[ilas] == ')')
+            {   int isep = address.LastIndexOf('(');
+                if(isep < 2) return address;
+                if(address[isep-1] == ' ') isep--;
+                return address.Substring(0, isep);
+            }
+            if(address[ilas] == '>')
+            {   int isep = address.LastIndexOf('<');
+                if(isep < 0) return address;
+                return address.Substring(isep+1, ilas-(isep+1));
+            }
+            return address;
         }
         
         // =====================================================================
@@ -552,7 +593,7 @@ namespace ZIMap
         public static BodyInfo ParseBodyInfo(string partList)
         {   if(string.IsNullOrEmpty(partList)) return null;
             ZIMapParser parser = new ZIMapParser(partList);
-            if(parser.Length <= 0 || parser[0].Type != ZIMapParserData.List) return null;
+            if(parser.Length <= 0 || parser[0].Type != ZIMapParser.TokenType.List) return null;
             
             BodyInfo info = new BodyInfo();
             info.Info = partList;
@@ -566,7 +607,7 @@ namespace ZIMap
         
         private static void ParseBodyInfo(List<BodyPart> plis, List<string> pother,
                                           ZIMapParser.Token list, uint level)
-        {   if(list.Type != ZIMapParserData.List)
+        {   if(list.Type != ZIMapParser.TokenType.List)
             {   string text = list.Text.ToUpper();
                 if(text == "ALTERNATIVE")
                 {   for(int irun=0; irun < plis.Count; irun++)
@@ -586,7 +627,7 @@ namespace ZIMap
             }
 
             uint ulen = (uint)list.List.Length;
-            if(ulen >= 7 && list.List[2].Type == ZIMapParserData.List)
+            if(ulen >= 7 && list.List[2].Type == ZIMapParser.TokenType.List)
             {   plis.Add(ParseBodyInfo(list, level));
                 return;
             }
@@ -616,7 +657,7 @@ namespace ZIMap
             part.Subtype = list[1].QuotedText;
             
             // 2 := body parameter list (value pairs) ...
-            if(list[2].Type == ZIMapParserData.List)
+            if(list[2].Type == ZIMapParser.TokenType.List)
             {   ZIMapParser.Token[] pars = list[2].List;
                 for(int ipar=0; ipar+1 < pars.Length; ipar+=2)
                     if(pars[ipar].Text.ToUpper() == "CHARSET")  
@@ -632,7 +673,7 @@ namespace ZIMap
             part.Encoding = list[5].QuotedText;
             
             // 6 := size
-            if(list[6].Type == ZIMapParserData.Number)
+            if(list[6].Type == ZIMapParser.TokenType.Number)
                 part.Size = list[6].Number;
             return part;
         }
