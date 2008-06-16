@@ -17,47 +17,9 @@ namespace ZIMap
 {
     public partial class ZIMapAdmin
     {
-        private static bool CheckArgCount(string[] args, uint umin, uint umax)
-        {   uint ucnt = (uint)((args == null) ? 0 : args.Length);
-            if(umax == 0) umax = uint.MaxValue;
-            // no arguments
-            if(umin == 0)
-            {   if(ucnt == 0) return true;
-                Error("No argument allowed, got {0}", ucnt);
-                return false;
-            }
-            // one argument
-            if(umin == 1 && umax == 1)
-            {   if(ucnt == 1) return true;
-                if(ucnt == 0) Error("Required argument missing");
-                else          Error("Only one argument allowed, got {0}", ucnt);
-                return false;
-            }
-            // range
-            if(ucnt < umin)
-            {   Error("Missing arguments (minimum {0}) got {1}", umin, ucnt);
-                return false;
-            }
-            if(ucnt > umax)
-            {   Error("To many arguments (maximum {0}) got {1}", umax, ucnt);
-                return false;
-            }
-            return true;
-        }
-        
-        private static bool CheckIdAndUidUse(string[] opts, out bool id, out bool uid)
-        {   id  = HasOption(opts, "id");
-            uid = HasOption(opts, "uid");
-            if(id | uid)
-            {   if(!Confirm("Are you sure that you really understand how to use -id or -uid"))
-                    return false;
-            }
-            return true;
-        }
-
-        // =============================================================================
-        // ExecuteXXX
-        // =============================================================================
+        // =====================================================================
+        // Miscelaneous operations: Cache and Debug
+        // =====================================================================
 
         public static bool ExecuteCache(string[] opts)
         {   bool bOn    = HasOption(opts, "on");
@@ -74,106 +36,103 @@ namespace ZIMap
             return true;
         }
 
-        // =============================================================================
+        public static bool ExecuteDebug(string arg)
+        {   string message;
+            if(string.IsNullOrEmpty(arg))
+                message = "Current Debug level: {0}";
+            else
+            {   uint level;
+                if(!CheckNumber(arg, out level)) return false;
+                DebugLevel(level);
+                message = "Changed Debug level to: {0}";
+            }
+            Message(message, Debug);
+            return true;
+        }
+
+        // =====================================================================
         // Mailbox operations: Create, Delete, Rename and Subscribe
-        // =============================================================================
+        // =====================================================================
 
         public static bool ExecuteCreate(string[] args)
         {   if(!Cache.CheckMailboxArgs(ref args, false))    // none must exist
                 return false;
-
             bool bok = true;
-            using(ZIMapCommand.Create cmd = new ZIMapCommand.Create(App.Factory))
-            {   if(cmd == null) return false;
-
-                for(int irun=0; irun < args.Length; irun++)
-                {   string boxname = args[irun];
-                    cmd.Reset();
-                    cmd.Queue(boxname);
-                    if(!cmd.Data.Succeeded)
-                    {   Error("Failed to create mailbox: {0}: {1}", boxname, cmd.Data.Message);
-                        bok = false; continue;
-                    }
-                    Message("Mailbox created: {0}", boxname);
-                    Cache.AddMailbox(boxname);
-                }
-            }
+            for(int irun=0; irun < args.Length; irun++)     // create them
+                if(!Cache.CreateMailbox(args[irun])) bok = false;
             return bok;
         }
 
-        public static bool ExecuteDelete(string[] args)
-        {   ZIMapApplication.MailBox[] boxes = Cache.GetMailboxes(true);
+        public static bool ExecuteDelete(string[] opts, string[] args)
+        {   bool bRecurse = HasOption(opts, "recurse");
+
+            ZIMapApplication.MailBox[] boxes = Cache.GetMailboxes(true);
             if(boxes == null) return false;                 // want message counts
             if(!Cache.CheckMailboxArgs(ref args, true))     // all must exist
                 return false;
 
-            bool bok = true;
-            using(ZIMapCommand.Delete cmd = new ZIMapCommand.Delete(App.Factory))
-            {   if(cmd == null) return false;
-
-                for(int irun=0; irun < args.Length; irun++)
-                {   string boxname = args[irun];
-
-                    // get mailbox and check if empty ...
-                    uint idx;
-                    if(!Cache.FindMailbox(ref boxname, true, out idx)) return false;
-                    if(boxes[idx].Messages > 0)
-                    {   if(!Confirm("Mailbox '{0}' is not empty. Continue",
-                                    boxname)) continue;
-                    }
-
-                    // now delete it ...
-                    if(boxname == Cache.CurrentMailbox) ExecuteClose();
-                    cmd.Reset();
-                    cmd.Queue(boxname);
-                    if(!cmd.Data.Succeeded)
-                    {   Error("Failed to delete '{0}': {1}", boxname, cmd.Data.Message);
-                        bok = false; continue;
-                    }
-                    Message("Mailbox deleted: {0}", boxname);
-                    Cache.DeleteMailbox(boxname);
+            uint udel = 0;
+            string warn = null;
+            for(int irun=0; irun < args.Length; irun++)     // count non-empty mboxs
+            {   CacheData.MBoxRef umbx = Cache[args[irun]];
+                if(bRecurse)
+                {   CacheData.MBoxRef ubox = CacheData.MBoxRef.Invalid;
+                    while(Cache.RecurseMailboxes(umbx, ref ubox))
+                    if(umbx.Messages > 0) { udel++; warn = umbx.Name; }
                 }
+                if(umbx.Messages > 0) { udel++; warn = umbx.Name; }
+            }
+            if(udel > 1 &&                                  // multiple non-empty
+                !Confirm("Do you want to delete {0} non empty mailboxes", udel))
+                    return false;
+            if(udel < 2 && warn != null &&                  // one non-empty mbox
+                !Confirm("Mailbox '{0}' is not empty. Continue", warn)) 
+                    return false;
+            
+            bool bok = true;
+            for(int irun=0; irun < args.Length; irun++)     // loop to delete
+            {   CacheData.MBoxRef umbx = Cache[args[irun]];
+                if(bRecurse)
+                {   CacheData.MBoxRef ubox = CacheData.MBoxRef.Invalid;
+                    while(Cache.RecurseMailboxes(umbx, ref ubox))
+                    {   if(umbx.Index == ubox.Index) continue;
+                        if(!Cache.DeleteMailbox(ubox)) bok = false;
+                    }
+                }
+                if(!Cache.DeleteMailbox(umbx)) bok = false;
             }
             return bok;
         }
 
         public static bool ExecuteRename(string[] args)
-        {   if(args.Length != 2)
-            {   Error("Invalid argument count (must be 2)");
-                return false;
-            }
-            string boxname = args[0];
+        {   if(!CheckArgCount(args, 2, 2)) return false;
+            CacheData.MBoxRef umbx = Cache[args[0]];
+            if(!umbx.Valid) return false;
             string newname = args[1];
-            if(!Cache.ResolveDotArg(ref boxname)) return false;
-            if(!Cache.FindMailbox(ref boxname, true)) return false;
-            if(Cache.FindMailbox(ref newname, false)) return false;
-            if(boxname == newname)
-            {   Error("Both names are equal: " + boxname);
+            if(!Cache.FindMailbox(ref newname, false)) return false;
+            if(umbx.Name == newname)
+            {   Error("Both names are equal: " + umbx.Name);
                 return false;
             }
-            if(boxname == Cache.CurrentMailbox) ExecuteClose();
+            if(umbx.Index == Cache.CurrentMailbox.Index) Cache.CloseMailbox();
 
             ZIMapCommand.Rename cmd = new ZIMapCommand.Rename(App.Factory);
             if(cmd == null) return false;
-            cmd.Queue(boxname, newname);
-            bool bok = cmd.Data.Succeeded;
+            cmd.Queue(umbx.Name, newname);
+            bool bok = cmd.CheckSuccess();
             if(!bok) Error("Rename to '{0}' failed: {1}",
-                           newname, cmd.Data.Message);
+                           newname, cmd.Result.Message);
             else
             {   Cache.Clear();
-                Message("Renamed '{0}' to '{1}'", boxname, newname);
-                cmd.Dispose();
+                Message("Renamed '{0}' to '{1}'", umbx.Name, newname);
             }
+            cmd.Dispose();
             return bok;
         }
 
         public static bool ExecuteSubscribe(string[] opts, string[] args)
-        {   int irun=0;
-            bool bAdd    = HasOption(opts, "add");
+        {   bool bAdd    = HasOption(opts, "add");
             bool bRemove = HasOption(opts, "remove");
-
-            ZIMapApplication.MailBox[] boxes = Cache.GetMailboxes(true);
-            if(boxes == null) return false;             // need subscription info
 
             string action = null;
             ZIMapCommand.MailboxBase cmd = null;
@@ -199,41 +158,35 @@ namespace ZIMap
                 {   Error("List mode, only one {filter} argument allowed");
                     return false;
                 }
-                string[] subs = { "subscription" };
-                return ExecuteList(subs, (args.Length == 1) ? args[0] : "");
+                return ExecuteList(new string[] { "subscription" }, 
+                                   (args.Length == 1) ? args[0] : "");
             }
 
-            if(!Cache.CheckMailboxArgs(ref args, true)) // mailboxes must exist
+            Cache.GetMailboxes(true);                       // we want details
+            if(!Cache.CheckMailboxArgs(ref args, true))     // mailboxes must exist
             {   cmd.Dispose();
                 return false;
             }
 
             bool bok = true;
-            for(; irun < args.Length; irun++)
-            {   string boxname = args[irun];
-                uint idx;
-                if(!Cache.FindMailbox(ref boxname, true, out idx)) break;
-                if(cmd == null)
-                {   Message("{0}: {1}", (boxes[idx].Subscribed ?
-                        "    subscribed" : "not subscribed"), boxes[idx].Name);
-                    continue;
-                }
+            for(int irun=0; irun < args.Length; irun++)
+            {   CacheData.MBoxRef umbx = Cache[args[irun]]; // should never fail
                 cmd.Reset();
-                cmd.Queue(boxname);
-                if(!cmd.Data.Succeeded)
-                {   Error("Failed to {0} mailbox '{1}': {2}", action, boxname, cmd.Data.Message);
-                    bok = false; continue;
+                cmd.Queue(umbx.Name);
+                if(!cmd.CheckSuccess(string.Format(":Failed to {0} mailbox: {1}: {2}",
+                                     action, umbx.Name, cmd.Result.Message)))
+                {   bok = false; continue;
                 }
-                Message("Mailbox {0}d: {1}", action, boxname);
-                boxes[idx].Subscribed = bAdd;
+                Message("Mailbox {0}d: {1}", action, umbx.Name);
+                Cache.Mailboxes[umbx.Index].Subscribed = bAdd;
             }
             cmd.Dispose();
             return bok;
         }
 
-        // =============================================================================
+        // =====================================================================
         // Listings: List, Show
-        // =============================================================================
+        // =====================================================================
 
         public static bool ExecuteList(string[] opts, string filter)
         {   bool bAll    = HasOption(opts, "all");
@@ -245,7 +198,8 @@ namespace ZIMap
 
             Cache.MailboxFilter = filter;
             ZIMapApplication.MailBox[] mailboxes = Cache.GetMailboxes(bDetail, bSubscr);
-            return ListMailboxes(mailboxes, false, bSubscr, bDetail, bRights, bQuota);
+            return bSubscr ? ListSubscribed(mailboxes, bDetail, bRights, bQuota)
+                           : ListMailboxes(mailboxes, bDetail, bRights, bQuota);
         }
 
         public static bool ExecuteShow(string[] opts, string mailbox)
@@ -265,76 +219,61 @@ namespace ZIMap
             if(mailbox != "" && !ExecuteOpen(null, mailbox))
                 return false;
 
-            ZIMapApplication.MailInfo[] mails = Cache.GetHeaders();
-            return ListMails(mails, bTo, bFrom, bSubject,
+            return ListMails(Cache.GetHeaders(), bTo, bFrom, bSubject,
                              bDate, bSize, bFlags, bUID, bID);
         }
 
-        // =============================================================================
+        // =====================================================================
         // Command for the current mailbox: Open, Close, Copy
-        // =============================================================================
+        // =====================================================================
 
         public static bool ExecuteOpen(string[] opts, string boxname)
         {   bool bRead  = HasOption(opts, "read");
             bool bWrite = HasOption(opts, "write");
+            if(CheckExclusive(opts, "read", "write") > 1) return false;
 
-            if(string.IsNullOrEmpty(boxname) || boxname == ".")
-            {   if(Cache.CurrentMailbox == null)
-                {   Message("No current mailbox");
-                    return true;
-                }
-                boxname = Cache.CurrentMailbox;
-            }
-
-            ZIMapApplication.MailBox[] boxes = Cache.GetMailboxes(true);
-            if(boxes == null) return false;             // want message counts
-            uint idx;
-            if(!Cache.FindMailbox(ref boxname, true, out idx)) return false;
+            Cache.GetMailboxes(true);                   // want message counts
+            CacheData.MBoxRef umbx = Cache[boxname];    // get the mailbox
+            if(!umbx.Valid) return false;               // no such mailbox
 
             string action = "current";
-            if(Cache.CurrentMailbox != boxname)      action = "opened";
-            else if(bRead && !App.MailboxIsReadonly) action = "reopened";
-            else if(bWrite && App.MailboxIsReadonly) action = "reopened";
+            if(Cache.CurrentMailbox.Index != umbx.Index) action = "opened";
+            else if(bRead && !App.MailboxIsReadonly)     action = "reopened";
+            else if(bWrite && App.MailboxIsReadonly)     action = "reopened";
 
-            if(action != "current")
-            {   if(Cache.CurrentMailbox != null) ExecuteClose();
-                if(!Cache.OpenMailbox(boxname, !bWrite)) return false;
+            if(action != "current")                     // open or reopen
+            {   Cache.CloseMailbox();
+                if(!Cache.OpenMailbox(umbx, !bWrite)) return false;
             }
             Message("Mailbox {0}: {1} ({2} mails {3})",
-                    action, boxes[idx].Name, boxes[idx].Messages,
+                    action, umbx.Name, umbx.Messages,
                     App.MailboxIsReadonly ? "Readonly" : "Writable" );
             return true;
         }
 
         public static bool ExecuteClose()
-        {
-            string curr = Cache.CurrentMailbox;
-            if(Cache.CloseMailbox())
-            {   Info("Mailbox closed: {0}", curr);
-                return true;
-            }
-            Error("No open mailbox");
-            return false;
+        {   if(!Cache.CloseMailbox()) Error("No current mailbox");
+            return true;                                // ignore errors
         }
 
         public static bool ExecuteCopy(string[] opts, string[] args)
-        {    if(args.Length < 2)
-            {   Error("Missing arguments");
-                return false;
-            }
+        {   if(!CheckArgCount(args, 2, 0)) return false;
+            CacheData.MBoxRef umbx = Cache[args[0]];    // get the mailbox
+            if(!umbx.Valid) return false;               // no such mailbox
             bool bID, bUID;
-            if(!CheckIdAndUidUse(opts, out bID, out bUID)) return false;
-
-            Cache.CommandRunning = true;
-            uint[] uids = Cache.CheckItemArgs(args, 1, bID, bUID);
+            if(!CheckIdAndUidUse(opts, out bID, out bUID))
+                return false;                           // not confirmed
+            uint[] uids = Cache.CheckItemArgs(args, 1, bID, bUID, false);
             if(uids == null) return false;              // bad arg list
 
-            return Cache.CopyMails(uids, !bID, args[0]);
+            Message("Copying {0} mail{1} to mailbox '{2}'",
+                    uids.Length, (uids.Length == 1) ? "" : "s", umbx.Name);
+            return Cache.CopyMails(uids, !bID, umbx);
         }
 
-        // =============================================================================
+        // =====================================================================
         // Command for the current mailbox: Set, Unset and Expunge
-        // =============================================================================
+        // =====================================================================
 
         public static bool ExecuteSet(string[] opts, string[] args)
         {   return ExecuteSet(opts, args, true);
@@ -350,25 +289,17 @@ namespace ZIMap
             bool bFlagged = HasOption(opts, "flagged");
             bool bCustom  = HasOption(opts, "custom");
 
-            if(args.Length < 1)
-            {   Error("Missing arguments");
+            if(!CheckArgCount(args, 1, 0))                      // need a least 1 arg
                 return false;
-            }
-
             bool bID, bUID;
-            if(!CheckIdAndUidUse(opts, out bID, out bUID)) return false;
-
-            string mailbox = ".";
-            if(!Cache.FindMailbox(ref mailbox, true)) return false;
-            if(Cache.CurrentReadonly)
-            {   if(!Confirm("Current mailbox '" + mailbox + "' is readonly. Change mode"))
-                    return false;
-                Info("Setting write mode for current mailbox");
-            }
+            if(!CheckIdAndUidUse(opts, out bID, out bUID))      // output a warning
+                return false;
+            if(!Cache.OpenMailbox(false))                       // clear readonly mode
+                return false;
 
             uint uofs = 0;
             string[] custom = null;
-            if(bCustom)                                 // scan for custom flags...
+            if(bCustom)                                         // scan for custom flags...
             {   List<string> list = null;
                 while(uofs < args.Length)
                 {   string cust = args[uofs];
@@ -380,31 +311,49 @@ namespace ZIMap
             }
 
             Cache.CommandRunning = true;
-            uint[] uids = Cache.CheckItemArgs(args, uofs, bID, bUID);
-            if(uids == null) return false;              // bad arg list
+            uint[] uids = Cache.CheckItemArgs(args, uofs, bID, bUID, false);
+            if(uids == null) return false;                      // bad arg list
 
             return Cache.FlagMails(uids, !bID, bSet, bDeleted, bSeen, bFlagged, custom);
         }
 
-        public static bool ExecuteExpunge()
-        {   string mailbox = ".";
-            if(!Cache.FindMailbox(ref mailbox, true)) return false;
-            if(Cache.CurrentReadonly)
-            {   if(!Confirm("Current mailbox '" + mailbox + "' is readonly. Change mode"))
+        public static bool ExecuteExpunge(string[] opts, string[] args)
+        {   bool bID, bUID;
+            if(!CheckIdAndUidUse(opts, out bID, out bUID))      // output a warning
+                return false;
+            if(!Cache.OpenMailbox(false))                       // clear readonly mode
+                return false;
+            Cache.CommandRunning = true;
+
+            // flag messages as deleted ...
+            if(args.Length > 0)
+            {   uint[] uids = Cache.CheckItemArgs(args, 0, bID, bUID, false);
+                if(uids == null) return false;                  // bad arg list
+                if(!Cache.FlagMails(uids, !bID, true, true, false, false, null))
                     return false;
-                Info("Setting write mode for current mailbox");
             }
 
-            int cnt = Cache.ExpungeMails();
-            if(cnt < 0) return false;
-            Cache.CommandRunning = false;
+            // get the number of deleted messages ...
+            ZIMapCommand.Search cmd = new ZIMapCommand.Search(App.Factory);
+            cmd.Queue("deleted");
+            if(!cmd.CheckSuccess("could not search")) return false;
+            if(cmd.Matches == null || cmd.Matches.Length == 0)
+            {   Info("No messages are marked as deleted");
+                return true;
+            }
+            if(!Confirm("Expunge {0} messages from mailbox '{1}'",
+                        cmd.Matches.Length, Cache.CurrentMailbox)) return false;
+
+            // and finally do it ...
+            uint cnt = Cache.ExpungeMails();
+            if(cnt == uint.MaxValue) return false;
             Info("Expunged {0} mail{1}", cnt, (cnt == 1) ? "" : "s");
             return true;
         }
 
-        // =============================================================================
+        // =====================================================================
         // Command for the current mailbox: Sort
-        // =============================================================================
+        // =====================================================================
 
         public static bool ExecuteSort(string[] opts)
         {   bool bRevert = HasOption(opts, "revert");
@@ -434,7 +383,7 @@ namespace ZIMap
             Cache.CommandRunning = true;
             ZIMapApplication.MailInfo[] headers = Cache.GetHeaders();
             if(headers == null) return false;
-            App.MonitorProgress(30);
+            App.Connection.ProgressReporting.Update(30);
 
             if(ucnt > 0)
             {   object[] keys = new object[headers.Length];
@@ -453,17 +402,17 @@ namespace ZIMap
                         else              keys[urun] = mail.DateBinary;
                     }
                 }
-                App.MonitorProgress(50);
+                App.Connection.ProgressReporting.Update(50);
                 Array.Sort(keys, headers);
             }
-            App.MonitorProgress(80);
+            App.Connection.ProgressReporting.Update(80);
             if(bRevert) Array.Reverse(headers);
             return true;
         }
 
-        // =============================================================================
+        // =====================================================================
         // Run any IMap command: imap
-        // =============================================================================
+        // =====================================================================
         public static bool ExecuteImap(string[] opts, string[] args)
         {   bool bVerba = HasOption(opts, "verbatim");
             if(!CheckArgCount(args, 1, 0)) return false;
@@ -504,9 +453,9 @@ namespace ZIMap
             return true;
         }
 
-        // =============================================================================
+        // =====================================================================
         // Namespace support: user and shared
-        // =============================================================================
+        // =====================================================================
         public static bool ExecuteShared(string[] opts, string[] args)
         {   return ExecuteUser(opts, args, false);
         }
@@ -604,29 +553,24 @@ namespace ZIMap
             }
 
             // get user, storage and message quota
-            bool bFail = false;
             uint uStorage = 0, uMessage = 0;
             string user = null;
             if(args.Length == 3)
             {   user = args[0];
-                if(!uint.TryParse(args[1], out uStorage)) bFail = true;
-                if(!uint.TryParse(args[2], out uMessage)) bFail = true;
+                if(!CheckNumber(args, 1, out uStorage)) return false;
+                if(!CheckNumber(args, 2, out uMessage)) return false;
             }
             else if( args.Length == 2)
             {   if(uint.TryParse(args[0], out uStorage))
-                {   if(!uint.TryParse(args[1], out uMessage)) bFail = true;
+                {   if(!CheckNumber(args, 1, out uMessage)) return false;
                 }
                 else
                 {   user = args[0];
-                    if(!uint.TryParse(args[1], out uStorage)) bFail = true;
+                    if(!CheckNumber(args, 1, out uStorage)) return false;
                 }
             }
             else if( args.Length == 1)
                 user = args[0];
-            if(bFail)
-            {   Error("Numeric argument expected");
-                return false;
-            }
 
             // use the ListPrefix as default, extract user name
             if(user == null) user = Cache.Qualifier;
@@ -676,27 +620,24 @@ namespace ZIMap
             return false;                                   // should never go here
         }
 
-        // =============================================================================
+        // =====================================================================
         // Quota support: quota
-        // =============================================================================
+        // =====================================================================
         public static bool ExecuteQuota(string[] opts, string[] args)
         {   bool bMega  = HasOption(opts, "mbyte");
-            if(args.Length < 1)
-            {   Error("No mailbox specified");
-                return false;
-            }
-            string mailbox = args[0];
-            if(!Cache.FindMailbox(ref mailbox, true)) return false;
+            if(!CheckArgCount(args, 1, 3)) return false;        // need mailbox
+            CacheData.MBoxRef umbx = Cache[args[0]];
+            if(!umbx.Valid) return false;                       // no such mailbox
 
             if(args.Length == 1)
             {   string qroot, storage, message;
-                if(!FormatQuota(mailbox, out storage, out message, out qroot))
+                if(!FormatQuota(umbx.Name, out storage, out message, out qroot))
                     return false;
                 if(qroot == null)
-                {   Message("Mailbox '{0}' has no quota limits", mailbox);
+                {   Message("Mailbox '{0}' has no quota limits", umbx.Name);
                     return true;
                 }
-                Message("Mailbox '{0}' has quota root '{1}'", mailbox, qroot);
+                Message("Mailbox '{0}' has quota root '{1}'", umbx.Name, qroot);
                 if(storage != null) Message(storage);
                 if(message != null) Message(message);
                 return true;
@@ -711,16 +652,16 @@ namespace ZIMap
                 return false;
             }
             if( bMega) uStorage *= 1024;
-            if(!App.QuotaLimit(mailbox, uMessage, uStorage))
+            if(!App.QuotaLimit(umbx.Name, uMessage, uStorage))
                 return false;
-            Info("Quota limits for '{0}' updated", mailbox);
+            Info("Quota limits for '{0}' updated", umbx.Name);
             Cache.Clear();
             return true;
         }
 
-        // =============================================================================
+        // =====================================================================
         // ACL support: rights
-        // =============================================================================
+        // =====================================================================
         public static bool ExecuteRights(string[] opts, string[] args)
         {   bool bAll   = HasOption(opts, "all");
             bool bRead  = HasOption(opts, "read");
@@ -728,7 +669,7 @@ namespace ZIMap
             bool bNone  = HasOption(opts, "none");
             bool bCust  = HasOption(opts, "custom");
             bool bDeny  = HasOption(opts, "deny");
-            uint uopt = ExclusiveOption(opts, "all", "read", "write", "none", "custom");
+            uint uopt = CheckExclusive(opts, "all", "read", "write", "none", "custom");
             if(bCust && args.Length < 2)
             {   Error("Missing argument(s)");
                 return false;
@@ -800,7 +741,7 @@ namespace ZIMap
                     ((ZIMapCommand.DeleteACL)acl).Queue(mailbox, user);
                 else
                     ((ZIMapCommand.SetACL)acl).Queue(mailbox, user, rights);
-                if(!acl.Data.Succeeded)
+                if(!acl.CheckSuccess())
                 {   Error("Set ACL failed for: {0}", user);
                     bok = false;
                 }
@@ -810,9 +751,9 @@ namespace ZIMap
             return bok;
         }
 
-        // =============================================================================
+        // =====================================================================
         // Info
-        // =============================================================================
+        // =====================================================================
         public static bool ExecuteInfo(string[] opts, string arg)
         {   bool bMailbox = HasOption(opts, "mailbox");
             bool bServer  = HasOption(opts, "server");
@@ -822,11 +763,11 @@ namespace ZIMap
             bool bHead    = HasOption(opts, "headers");
             bool bBody    = HasOption(opts, "body");
 
-            if(ExclusiveOption(opts, "mailbox", "server", "application",
+            if(CheckExclusive(opts, "mailbox", "server", "application",
                                      "id", "uid") > 1) return false;
-            if(ExclusiveOption(opts, "mailbox", "server", "application",
+            if(CheckExclusive(opts, "mailbox", "server", "application",
                                      "body") > 1) return false;
-            if(ExclusiveOption(opts, "mailbox", "server", "application",
+            if(CheckExclusive(opts, "mailbox", "server", "application",
                                      "headers") > 1) return false;
             if((bServer || bApp) && arg != "")
             {   Error("Extra arguments not allowed");
@@ -849,34 +790,31 @@ namespace ZIMap
             }
 
             // info about a mail item ...
-            uint uidx = Cache.FindMail(arg, bID, bUID);
-            if(uidx == uint.MaxValue)
-            {   Error("No such mail");
-                return false;
-            }
-
+            uint uidx = Cache.CheckItemArgs(arg, bID, bUID);
+            if(uidx == uint.MaxValue) return false;
             uint umsk = 0;
             if(bHead) umsk += 1;
             if(bBody) umsk += 2;
             return ShowInfo(new uint[] { uidx, umsk });
         }
 
-        // =============================================================================
+        // =====================================================================
         // Search
-        // =============================================================================
+        // =====================================================================
         public static bool ExecuteSearch(string[] opts, string[] args)
         {   bool bHeader = HasOption(opts, "header");
             bool bBody   = HasOption(opts, "body");
             bool bQuery  = HasOption(opts, "query");
             bool bOr     = HasOption(opts, "or");
-            if(ExclusiveOption(opts, "query", "or") > 1) return false;
+
+            if(CheckExclusive(opts, "query", "or") > 1)     // any conflict?
+                return false;
+            if(!CheckArgCount(args, 1, 0))                  // need an argument
+                return false;
+            if(!Cache.OpenMailbox(true))                    // need current mbox
+                return false;
 
             uint uarg = (uint)args.Length;
-            if(uarg == 0)
-            {   Error("Not enough arguments");
-                return false;
-            }
-
             string[] extra = null;
             string search;
             string what = "TEXT";
@@ -887,12 +825,12 @@ namespace ZIMap
             {   string text = string.Format("({0})", args[0].Trim());
                 ZIMapParser parser = new ZIMapParser(text);
                 if(parser.Length != 1 ||                    // should not happen
-                   parser[0].Type != ZIMapParserData.List) return false;
+                   parser[0].Type != ZIMapParser.TokenType.List) return false;
                 ZIMapParser.Token query = parser[0];
                                                             // remove extra () ...
-                while(query.Type == ZIMapParserData.List &&
+                while(query.Type == ZIMapParser.TokenType.List &&
                       query.List.Length == 1 &&
-                      query.List[0].Type == ZIMapParserData.List)
+                      query.List[0].Type == ZIMapParser.TokenType.List)
                     query = query.List[0];
 
                 ZIMapParser.Token[] qlist = query.List;
@@ -912,9 +850,6 @@ namespace ZIMap
                     Array.Copy(args, 1, extra, 0, uarg);
                 }
                 search = query.ToString();
-
-                ZIMapApplication.MailBox mailbox = Cache.GetCurrentMailbox(false);
-                if(mailbox.Name == null) return false;
             }
             else
             {   extra = args;
@@ -944,53 +879,140 @@ namespace ZIMap
 
         private static void QueryCountArgs(ZIMapParser.Token[] qlist, ref uint uvals)
         {   for(uint urun=0; urun < qlist.Length; urun++)
-                if(qlist[urun].Type == ZIMapParserData.List)
+                if(qlist[urun].Type == ZIMapParser.TokenType.List)
                     QueryCountArgs(qlist[urun].List, ref uvals);
                 else
                     if(qlist[urun].Text == "?") uvals++;
         }
 
-        // =============================================================================
+        // =====================================================================
         // Export and Import
-        // =============================================================================
+        // =====================================================================
+        //
+        //  export -list path
+        //  export [-override] -recurse path [mailbox]
+        //  export [-override] [-id|-uid] path [mailbox [items...]]
+        //
         public static bool ExecuteExport(string[] opts, string[] args)
-        {   bool bList    = HasOption(opts, "list");
-            bool bRecurse = HasOption(opts, "recurse");
+        {   bool bList     = HasOption(opts, "list");
+            bool bRecurse  = HasOption(opts, "recurse");
+            bool bOverride = HasOption(opts, "override");
+            bool bQuoted   = HasOption(opts, "quoted");
             bool bID, bUID;
             if(!CheckIdAndUidUse(opts, out bID, out bUID)) return false;
-            if(ExclusiveOption(opts, "list", "recurse") > 1) return false;
-            if(ExclusiveOption(opts, "list", "id", "uid") > 1) return false;
-            
-            // TODO: args default is INBOX
+            if(CheckExclusive(opts, "list",
+                "recurse", "override", "quoted", "id", "uid") > 1) return false;
+            if(CheckExclusive(opts, "recurse", "id", "uid") > 1) return false;
+
+            // get folder or file and do we have a mailbox argument?
+            string path = (args.Length > 0) ? args[0] : "";
+            if(path == "")
+            {   Error("Missing path argument");
+                return false;
+            }
+
+            // get the root mailbox of this export (details required)
+            Cache.GetMailboxes(true);
+            string mailbox = (args.Length > 1) ? args[1] : ".";
+            CacheData.MBoxRef umbx = Cache[mailbox];
+            if(!umbx.Valid) return false;
+            if(!Cache.OpenMailbox(umbx, true)) return false;
+
+            // get item list
+            if((bList && args.Length > 1) || (bRecurse && args.Length > 2))
+            {   Error("Invalid extra arguments");
+                return false;
+            }
+
+            uint[] uids = null;
+
+            if(args.Length > 2)
+            {   uids = Cache.CheckItemArgs(args, 2, bID, bUID, true);
+                if(uids == null) return false;              // bad arg list
+            }
+
             // TODO: use account for inbox (friendly name see list)
-            
-            ZIMapExport expo = App.OpenExport(args[0], true, true);
-            if(expo == null) return false;
+            if(App.OpenExport(path, !bRecurse, !bOverride) == null) return false;
+            App.Export.Delimiter = Cache.Namespace.Delimiter;
             if(bList)
-            {   ZIMapExport.DumpMailFiles(expo.Existing);
+            {   ListExports();
                 return true;
             }
 
-            // TODO: multiple args need -merge or a folder            
-            
-            for(int irun=1; irun < args.Length; irun++)
-            {   System.IO.Stream strm = expo.WriteMailbox(args[irun]);
-                if(strm == null) break;
-                strm.Close();
-                Message("Mailbox written: " + args[irun]);
+            Cache.CommandRunning = true;
+            uint usum = 0;
+            uint uerr = 0;
+
+            if(bRecurse)
+            {   CacheData.MBoxRef ubox = CacheData.MBoxRef.Invalid;
+                uint utot = 0;
+                while(Cache.RecurseMailboxes(umbx, ref ubox))
+                    utot += ubox.Messages;
+                while(Cache.RecurseMailboxes(umbx, ref ubox))
+                    if(!Cache.ExportMailbox(ubox, bQuoted, null, utot, ref usum)) uerr++;
             }
-            return false;
+            else
+                if(!Cache.ExportMailbox(umbx, bQuoted, uids, 0, ref usum)) uerr++;
+            App.Export.IOStream = null;
+            return (uerr == 0);
         }
 
         public static bool ExecuteImport(string[] opts, string[] args)
-        {   bool bList = HasOption(opts, "list");
-            ZIMapExport expo = App.OpenImport(args[0], true);
-            if(expo == null) return false;
+        {   bool bList    = HasOption(opts, "list");
+            bool bRecurse = HasOption(opts, "recurse");
+            bool bNoFlags = HasOption(opts, "noflags");
+            bool bClean   = HasOption(opts, "clean");
+            if(CheckExclusive(opts, "list", "recurse", "noflags", "clean") > 1) return false;
+
+            // get folder or file and do we have a mailbox argument?
+            string path = (args.Length > 0) ? args[0] : "";
+            if(path == "")
+            {   Error("Missing path argument");
+                return false;
+            }
+            CacheData.MBoxRef umbx = Cache[(args.Length > 1) ? args[1] : "."];
+            if(!umbx.Valid) return false;
+            if(!Cache.OpenMailbox(umbx, true)) return false;
+
+            // open file or folder
+            if(App.OpenImport(path, !bRecurse) == null) return false;
+            App.Export.Delimiter = Cache.Namespace.Delimiter;
             if(bList)
-            {   ZIMapExport.DumpMailFiles(expo.Existing);
+            {   ListExports();
                 return true;
             }
-            return false;
+
+            ZIMapExport.MailFile[] files = App.Export.Existing;
+            if(files == null || files.Length == 0)
+            {   Error("No mbox data found");
+                return false;
+            }
+            uint ucnt = 0;
+            long lsiz = 0;
+            foreach(ZIMapExport.MailFile file in files)
+            {   if(!file.Valid)
+                {   Message("File skipped (no mbox): {0}", file.FileName);
+                    continue;
+                }
+                lsiz += file.FileInfo.Length;
+                ucnt++;
+
+            }
+            Message("Importing {0} mbox file{1} ({2} kByte)", ucnt, (ucnt == 1) ? "" : "s", lsiz/1024);
+            Cache.CommandRunning = true;
+
+            long lcur = 0;
+            long llen;
+            uint uerr = 0;
+            foreach(ZIMapExport.MailFile file in files)
+            {   if(!file.Valid) continue;
+                llen = file.FileInfo.Length;
+                if(!Cache.ImportMailbox(file.MailboxName, bRecurse, bNoFlags, bClean,
+                                        lcur, llen, lsiz)) uerr++;
+                lcur += llen;
+            }
+            Cache.Clear();
+            return (uerr == 0);
         }
     }
 }

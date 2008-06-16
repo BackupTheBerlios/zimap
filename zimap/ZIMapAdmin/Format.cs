@@ -40,22 +40,22 @@ namespace ZIMap
         // =============================================================================
         //         
         // =============================================================================
+        public static bool ListMailboxes(ZIMapApplication.MailBox[] mailboxes,
+                                         bool bDetail, bool bRights, bool bQuota)
+        {
+            return ListMailboxes_(mailboxes, false, false, bDetail, bRights, bQuota);
+        }
+        
         // TODO: ListMailboxes header text argument          
-        public static bool ListMailboxes(ZIMapApplication.MailBox[] mailboxes, bool bUsers,
+        public static bool ListMailboxes_(ZIMapApplication.MailBox[] mailboxes, bool bUsers,
                                          bool bSubscr, bool bDetail, bool bRights, bool bQuota)
         {   if(mailboxes == null) return false;
-            bool nbox = mailboxes.Length > 0;
-            if(nbox && bSubscr)
-            {   nbox = false;
-                foreach(ZIMapApplication.MailBox mb in mailboxes) 
-                    if(mb.Subscribed) {  nbox = true; break; }   
-            }
-            if(!nbox)
-            {   if(!bSubscr && !bUsers && !string.IsNullOrEmpty(ZIMapAdmin.Cache.Qualifier))
+            Cache.ListedMailboxes = new CacheData.MBoxRef(mailboxes, 0);
+            if(mailboxes.Length <= 0)
+            {   if(!bUsers && !string.IsNullOrEmpty(ZIMapAdmin.Cache.Qualifier))
                     Message("No mailboxes, prefix '{0}'", ZIMapAdmin.Cache.Qualifier);
                 else
-                    Message(bSubscr ? "No subscribed mailboxes" : 
-                            bUsers  ? "No visible users" : "No mailboxes");
+                    Message(bUsers  ? "No visible users" : "No mailboxes");
                 return true;
             }
             
@@ -113,8 +113,7 @@ namespace ZIMap
             table.Header(data);
             string subs = Ascii ? "*" : "■";    // HACK: for mono no "✓";
             for(uint irun = 0; irun < mailboxes.Length; irun++) 
-            {   if(bSubscr && !mailboxes[irun].Subscribed) continue;
-                uint   nidx = ZIMapServer.Personal;
+            {   uint   nidx = ZIMapServer.Personal;
                 string name = mailboxes[irun].Name;
                 if(nsok)                        // ok, use namespace
                 {   if(name != "INBOX")
@@ -268,11 +267,35 @@ namespace ZIMap
         // =============================================================================
         //         
         // =============================================================================
+        public static bool ListSubscribed(ZIMapApplication.MailBox[] mailboxes,
+                                          bool bDetail, bool bRights, bool bQuota)
+        {   if(mailboxes == null) return false;
+            uint nbox = 0;
+            for(uint irun = 0; irun < mailboxes.Length; irun++) 
+                if(mailboxes[irun].Subscribed) nbox++;
+            if(nbox == 0)
+            {   Message("No subscribed mailboxes"); 
+                return true;
+            }
+            ZIMapApplication.MailBox[] subs;
+            if(nbox == mailboxes.Length)
+                subs = mailboxes;
+            else
+            {   subs = new ZIMapApplication.MailBox[nbox]; nbox = 0;  
+                for(uint irun = 0; irun < mailboxes.Length; irun++) 
+                    if(mailboxes[irun].Subscribed) subs[nbox++] = mailboxes[irun];
+            }
+            return ListMailboxes_(subs, false, true, bDetail, bRights, bQuota);
+        }
+
+        // =============================================================================
+        //         
+        // =============================================================================
         public static bool ListUsers(bool otherUsers)
         {
             ZIMapApplication.MailBox[] users = ZIMapAdmin.Cache.GetUsers(otherUsers);
             if(users == null) return false;
-            return ListMailboxes(users, true, false, false, true, true);
+            return ListMailboxes_(users, true, false, false, true, true);
         }
 
         // =============================================================================
@@ -371,9 +394,9 @@ namespace ZIMap
                 ZIMapApplication.MailBox mbox = (ZIMapApplication.MailBox)what;
                 ListOutput(0, "          ", "Mailbox Information");
                 string msg = mbox.Name;
-                if(mbox.Name == Cache.CurrentMailbox)
+                if(mbox.Name == Cache.CurrentMailbox.Name)
                     msg = string.Format("{0} (current {1})", msg,
-                          Cache.CurrentReadonly ? "Read-Only" : "Writable");
+                          Cache.CurrentMailbox.ReadOnly ? "Read-Only" : "Writable");
                 else
                     msg += " (not current)";
                 ListOutput(1, "Mailbox   ", msg);
@@ -401,7 +424,17 @@ namespace ZIMap
             // -----------------------------------------------------------------
             if(what is uint[])
             {   uint[] uarg = (uint[])what;
-                ZIMapApplication.MailInfo mail = Cache.Headers[uarg[0]];
+                ZIMapApplication.MailInfo[] mails = Cache.Headers;
+                
+                uint uuid = uarg[0];
+                uint urun;
+                for(urun=0; urun < mails.Length; urun++)
+                    if(mails[urun].UID == uuid) break;
+                if(urun >= mails.Length)
+                {   Error("UID not found: " + uuid);
+                    return false;
+                }
+                ZIMapApplication.MailInfo mail = mails[urun];
                 ZIMapMessage mesg = new ZIMapMessage();
                 if(!mesg.Parse(mail.Literal, false)) return false;
 
@@ -409,13 +442,13 @@ namespace ZIMap
                 ZIMapCommand.Fetch cmd = new ZIMapCommand.Fetch(App.Factory);
                 cmd.UidCommand = true;
                 if((uarg[1] & 2) != 0)
-                    cmd.Queue(mail.UID, "BODY BODY.PEEK[TEXT]");
+                    cmd.Queue(uuid, "BODY BODY.PEEK[TEXT]");
                 else
-                    cmd.Queue(mail.UID, "BODY");
-                if(!cmd.Data.Succeeded) return false;  // TODO: err msg
+                    cmd.Queue(uuid, "BODY");
+                if(!cmd.CheckSuccess("Failed to get status")) return false;
                 if((uarg[1] & 2) != 0)
-                {   if(cmd.Data.Literals.Length != 1) return false;
-                    mesg.ParseBody(cmd.Data.Literals[0], 0);
+                {   if(cmd.Result.Literals.Length != 1) return false;
+                    mesg.ParseBody(cmd.Result.Literals[0], 0);
                 }
                 string[] parts = cmd.Items[0].Parts;
                 if(parts != null && parts.Length > 1 && parts[0] == "BODY")
@@ -424,7 +457,7 @@ namespace ZIMap
                 uint utxt = ListOutput(0, "          ", "Mail Information");
                 
                 ListOutput(1, "Item      ", string.Format("{0} (ID={1}  UID={2})",
-                                            uarg[0]+1, mail.Index, mail.UID));
+                                            urun+1, mail.Index, mail.UID));
                 ListOutput(1, "From      ", mesg.From); 
                 ListOutput(1, "To        ", mesg.To); 
                 ListOutput(1, "Subject   ", mesg.Subject); 
@@ -475,6 +508,13 @@ namespace ZIMap
             }
             
             return false;
+        }
+
+        // =============================================================================
+        // List Exports         
+        // =============================================================================
+        public static void ListExports()
+        {   ZIMapExport.DumpMailFiles(App.Export.Existing);
         }
     }
 }

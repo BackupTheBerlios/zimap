@@ -14,7 +14,7 @@ using ZTool;
 
 namespace ZIMap
 {
-    public class CacheData
+    public class CacheData : ZIMapBase
     {   /// <value>Enables or disables caching</value>
         public bool                         Enabled = true;
         /// <value>The result of the last <see cref="GetMailboxes"/></value>
@@ -24,14 +24,15 @@ namespace ZIMap
         /// <value>The result of the last <see cref="GetUsers"/></value>
         public ZIMapApplication.MailBox[]   Users;
 
+        public MBoxRef                      ListedMailboxes;
+
         // Full name of the current mailbox
-        private string                      currentMailbox;
+        private MBoxRef                     currentMailbox;
         // Filter for mailbox list
         private string                      mailboxFilter;
         
         private bool                        mailboxSubscrib;
         private bool                        mailboxDetailed;
-        private bool                        currentReadonly;
 
         // Flags cache users as 'other users'
         private bool                        usersOther;
@@ -39,37 +40,116 @@ namespace ZIMap
         // selected list prefix (from user command)
         private string                      qualifier;
 
-        private ZIMapApplication            app;
+        private ZIMapApplication            application;
+        private ZIMapServer                 server;    
+        private ZIMapFactory                factory;    
+        private ZIMapConnection             connection;    
+        private ZIMapConnection.Progress    progress;
         
-        public CacheData(ZIMapApplication application)
-        {   app = application;
+        // set by open mailbox
+        private ZIMapServer.Namespace       currentNamespace;
+        
+        // =============================================================================
+        // MBoxRef     
+        // =============================================================================
+
+        public struct MBoxRef
+        {
+            private uint                        index;
+            private bool                        ronly;
+            private ZIMapApplication.MailBox[]  boxes;
+         
+            public static   MBoxRef Invalid = new MBoxRef(null, uint.MaxValue); 
+            
+            public MBoxRef(ZIMapApplication.MailBox[] boxes, uint index)
+            {   this.index = index;
+                this.boxes = boxes;
+                this.ronly = true;
+            }
+            
+            /// <summary>Advance the current index, can be used as iterator.</summary>
+            /// <returns>On success <c>true</c> is returned.</returns>
+            public bool Next()
+            {   if(boxes == null || index+1 >= boxes.Length) return false;
+                index++;  return true;
+            }
+
+            /// <summary>Sets the current index.</summary>
+            /// <returns>On success <c>true</c> is returned.</returns>
+            public bool Next(uint position)
+            {   if (boxes == null || position >= boxes.Length) return false;
+                index = position; return true;
+            }
+            
+            public bool Open(ZIMapApplication application, bool readOnly)
+            {   bool bok = application.MailboxOpen(Name, readOnly);
+                ronly = application.MailboxIsReadonly;
+                return bok;
+            }
+            
+            public uint Index
+            {   get {   return index;   }
+            }
+            public bool ReadOnly
+            {   get {   return ronly;   }
+            }
+            public bool Valid
+            {   get {   if(boxes == null) return false;   
+                        return index < boxes.Length;
+                    }
+            }
+            public string Name
+            {   get {   return Valid ? boxes[index].Name : null;
+                    }
+            }
+            public uint Messages
+            {   get {   return Valid ? boxes[index].Messages : uint.MaxValue;
+                    }
+            }
         }
         
+        // =============================================================================
+        // xtor     
+        // =============================================================================
+       
+        public CacheData(ZIMapApplication application) : base(application.Parent)
+        {   this.application = application;
+            connection = application.Connection;
+            server     = application.Server;
+            factory    = connection.CommandLayer;
+            progress   = connection.ProgressReporting;
+            currentNamespace = server.NamespaceDataUser;
+            // At least deliver Info level messages ...
+            MonitorLevel = application.MonitorLevel;
+            if(MonitorLevel > ZIMapConnection.Monitor.Info) 
+                MonitorLevel = ZIMapConnection.Monitor.Info;
+        }
+            
         /// <summary>
-        /// Output a top level error message via ZIMapApplication.
+        /// Output a top level error message via ZIMapConnection.
         /// </summary>
         /// <param name="message">
         /// Message to be displayed as an application error.
         /// </param>
         /// <remarks>
-        /// While <see cref="ZIMapApplication.MonitorError"/> prefixes the error message
-        /// with it's class name, the application can use an additional colon to filter
-        /// top level error messages. Example: "ZIMapApplication::Top level error".
+        /// The ZIMapAdmin application uses an additional colon to filter
+        /// top level error messages. Example: ":Top level error".
         /// </remarks>
-        private void Error(string message)
-        {   app.MonitorError(":" + message);
+        protected override void MonitorInvoke(ZIMapConnection.Monitor level, string message)
+        {   if(MonitorLevel <= level)
+                ZIMapConnection.MonitorInvoke(connection, "Cache", level, ":" + message); 
         }
 
         // =============================================================================
         // Properties     
         // =============================================================================
 
-        public string CurrentMailbox
-        {   get {   return currentMailbox;  }
+        public ZIMapServer.Namespace Namespace
+        {   get {   return currentNamespace;    }
         }
-
-        public bool CurrentReadonly
-        {   get {   return currentReadonly;  }
+        
+        public MBoxRef CurrentMailbox
+        {   get {   return currentMailbox;  }
         }
 
         public string MailboxFilter
@@ -83,11 +163,9 @@ namespace ZIMap
         }
 
         public bool CommandRunning
-        {   get {   return (app.Progress != 100);  }
-            set {   if(value)                       // start progress bar ...   
-                    {    if(app.Progress == 100) app.MonitorProgress(0);
-                    }
-                    else app.MonitorProgress(100);
+        {   get {   return (progress.Percent < 100);  }
+            set {   if(value) progress.Reset();
+                    else      progress.Done();
                 }
         }
 
@@ -95,13 +173,25 @@ namespace ZIMap
         {   get {   return qualifier;  }
             set {   string qual = value;
                     if(qual == "INBOX")
-                        qual = app.Server.NamespaceDataUser.Qualifier;
+                        qual = server.NamespaceDataUser.Qualifier;
                     if(qual == qualifier) return;
                     qualifier = qual;
                     Mailboxes = null;
                 }
         }
+
+        public MBoxRef this[uint index]
+        {   get {   return new MBoxRef(Mailboxes, index);
+                }
+        }
         
+        public MBoxRef this[string mailbox]
+        {   get {   uint index;
+                    FindMailbox(ref mailbox, true, out index);
+                    return new MBoxRef(Mailboxes, index);
+                }
+        }
+
         // =============================================================================
         // Cache methods     
         // =============================================================================
@@ -118,12 +208,14 @@ namespace ZIMap
             mailboxFilter = null;
             mailboxSubscrib = false;
             mailboxDetailed = false;
+            currentMailbox = MBoxRef.Invalid;
         }
 
         // =============================================================================
         // IMap data access     
         // =============================================================================
 
+        /*
         public ZIMapApplication.MailBox GetCurrentMailbox(bool detailed)
         {   if(!string.IsNullOrEmpty(CurrentMailbox) && 
                GetMailboxes(detailed, false) != null)
@@ -133,6 +225,7 @@ namespace ZIMap
             currentMailbox = null;
             return new ZIMapApplication.MailBox();
         }
+        */
 
         public ZIMapApplication.MailBox[] GetMailboxes(bool detailed)
         {   return GetMailboxes(detailed, false);
@@ -149,34 +242,32 @@ namespace ZIMap
             uint smode = 0;
             if(detailed) smode = 1;
             if(subscribed) smode = 2;
-            Mailboxes = app.Mailboxes(qualifier, mailboxFilter, smode, detailed);
+            Mailboxes = application.Mailboxes(qualifier, mailboxFilter, smode, detailed);
             mailboxSubscrib = subscribed;
             mailboxDetailed = detailed;
             
             // A blank (e.g. "") list prefix filters for the current user!
-            uint ufil = app.Server.FindNamespaceIndex(qualifier, false);
+            uint ufil = server.FindNamespaceIndex(qualifier, false);
             if(ufil != uint.MaxValue)
-                app.Server.MailboxesFilter(ref Mailboxes, ufil);
+                server.MailboxesFilter(ref Mailboxes, ufil);
             
             // Allways sort (should by fast) ...
-            app.Server.MailboxSort(Mailboxes);
+            server.MailboxSort(Mailboxes);
             return Mailboxes;
         }
 
         public ZIMapApplication.MailInfo[] GetHeaders()
-        {
-            if(string.IsNullOrEmpty(currentMailbox))        // must have current
-            {   Error("No current mailbox");
+        {   if(!currentMailbox.Valid)                       // must have current
+            {   MonitorError("No current mailbox");
                 return null;
             }
             if(Headers != null && Enabled)                  // return from cache
                 return Headers;
 
-            // make sure that out current mailbox is open ...
-            if(!app.MailboxOpen(currentMailbox, currentReadonly))
+            // make sure that our current mailbox is open ...
+            if(!currentMailbox.Open(application, true))
                 return null;                                // could not reopen
-            
-            Headers = app.MailHeaders();
+            Headers = application.MailHeaders();
             return Headers;
         }
 
@@ -191,24 +282,24 @@ namespace ZIMap
             Users = null; usersOther = others;
             
             // reload user data
-            ZIMapServer.Namespace ns = others ? app.Server.NamespaceDataOther :
-                                                app.Server.NamespaceDataShared;
+            ZIMapServer.Namespace ns = others ? server.NamespaceDataOther :
+                                                server.NamespaceDataShared;
             if(!ns.Valid) return new ZIMapApplication.MailBox[0];
 
-            Users = app.Mailboxes(ns.Prefix, "%", 0, false);
+            Users = application.Mailboxes(ns.Prefix, "%", 0, false);
             if(Users == null) return null;
             
             // List of "other users", add current user
             if(others && ns.Valid)
             {   ZIMapApplication.MailBox[] oldu = Users;
                 Users = new ZIMapApplication.MailBox[oldu.Length + 1];
-                Users[0].Name = "INBOX"; //app.Server.MyMailboxName();
+                Users[0].Name = "INBOX";
                 Array.Copy(oldu, 0, Users, 1, oldu.Length);
             }
 
             // List of "shared folders", remove "user" folder and the current user
-            if(!others) app.Server.MailboxesFilter(ref Users, ZIMapServer.Shared);
-            app.Server.MailboxSort(Users);
+            if(!others) server.MailboxesFilter(ref Users, ZIMapServer.Shared);
+            server.MailboxSort(Users);
             return Users;
         }
         
@@ -238,52 +329,87 @@ namespace ZIMap
 
             if(bCreate || bDelete)
             {   if(bDelete)
-                {   ZIMapCommand.SetACL acl = new ZIMapCommand.SetACL(app.Factory);
-                    acl.Queue(user, ZIMapAdmin.Account, "lca");
-                    app.MonitorProgress(60);
+                {   ZIMapCommand.SetACL acl = new ZIMapCommand.SetACL(factory);
+                    acl.Queue(user, factory.User, "lca");
+                    progress.Update(60);
                 }
                 ZIMapCommand.MailboxBase cmd = 
-                    (ZIMapCommand.MailboxBase)(app.Factory.CreateByName(command)); 
+                    (ZIMapCommand.MailboxBase)(factory.CreateByName(command)); 
                 cmd.Queue(user);
-                if(cmd.Data.Succeeded)
+                if(cmd.CheckSuccess())
                 {   info1 = string.Format("Mailbox {0}d: {1}", command, user);
                     Users = null;
-                    if(bQuota) app.MonitorProgress(50);
+                    if(bQuota) progress.Update(50);
                     
                 }
                 else
-                {   Error(string.Format("Could not {0} mailbox: {1}", command, user));
+                {   MonitorError("Could not {0} mailbox: {1}", command, user);
                     bok = false;
                 }
                 cmd.Dispose();
             }
             
             if(bQuota)
-            {   if(app.QuotaLimit(user, storageLimit, messageLimit))
+            {   if(application.QuotaLimit(user, storageLimit, messageLimit))
                 {   info2 = string.Format("Quota limits for '{0}' updated", user);
                     Mailboxes = null;
                 }
             }
             
             CommandRunning = false;
-            if(info1 != null) ZIMapAdmin.Info(info1);
-            if(info2 != null) ZIMapAdmin.Info(info2);
+            if(info1 != null) MonitorInfo(info1);
+            if(info2 != null) MonitorInfo(info2);
             return bok;
         }
 
         // =============================================================================
         // Operations on mailboxes     
         // =============================================================================
+
+        public bool OpenMailbox(bool readOnly)
+        {   return OpenMailbox(this["."], readOnly);
+        }
         
         /// <summary>
-        /// Open a current mailbox.
+        /// Open a mailbox and make it current or enable write for the current mailbox. 
         /// </summary>
-        public bool OpenMailbox(string fullBoxname, bool readOnly)
-        {   Headers = null;
-            currentMailbox = null;
-            if(!app.MailboxOpen(fullBoxname, readOnly)) return false;
-            currentMailbox = fullBoxname;
-            currentReadonly = readOnly;
+        /// <param name="mailbox">
+        /// A full Mailbox name or "." for the current mailbox
+        /// </param>
+        /// <param name="readOnly">
+        /// If <c>true</c> the mailbox is opened readonly.
+        /// </param>
+        /// <returns>
+        /// On success <c>true</c> is returned.
+        /// </returns>        
+        /// <remarks>
+        /// Use the "." as name to check for a current mailbox or to reopen the current 
+        /// mailbox in write mode.
+        /// </remarks>
+        public bool OpenMailbox(MBoxRef mbox, bool readOnly)
+        {   if(!mbox.Valid) return false;
+            
+            // we want to use the current mailbox ...
+            if(mbox.Name == "." || mbox.Index == currentMailbox.Index)
+            {   if(!currentMailbox.Valid)
+                {   MonitorError("No current Mailbox");
+                    return false;
+                }
+                if(!readOnly && currentMailbox.ReadOnly)
+                {   if(!ZIMapAdmin.Confirm("Current mailbox '{0}' is readonly. Change mode", 
+                                           mbox.Name)) return false;
+                    MonitorInfo("Setting write mode for current mailbox");
+                }
+            }
+            else
+                Headers = null;
+
+            // (re-)open the mailbox
+            currentMailbox = MBoxRef.Invalid;
+            if(!mbox.Open(application, readOnly)) return false;
+            currentMailbox = mbox;
+            // TODO: move currentNamespace stuff to ZIMapApplication
+            currentNamespace = server.NamespaceData(server.FindNamespaceIndex(mbox.Name, true));
             return true;
         }
 
@@ -291,12 +417,41 @@ namespace ZIMap
         /// Close the current mailbox.
         /// </summary>
         public bool CloseMailbox()
-        {   bool bok = !string.IsNullOrEmpty(currentMailbox);
+        {   bool bok = currentMailbox.Valid;
+            string curr = currentMailbox.Name;
             Headers = null;
-            currentMailbox = null;
-            currentReadonly = false;
-            app.MailboxClose(false);
+            currentMailbox = MBoxRef.Invalid;
+            application.MailboxClose(false);
+            if(bok) MonitorInfo("Mailbox closed: {0}", curr);
             return bok;
+        }
+
+        public bool CreateMailbox(string boxname)
+        {   using(ZIMapCommand.Create cmd = new ZIMapCommand.Create(factory))
+            {   if(cmd == null) return false;
+                cmd.Queue(boxname);
+                if(!cmd.CheckSuccess(string.Format(
+                    ":Failed to create mailbox: {0}: {1}",
+                    boxname, cmd.Result.Message))) return false;
+                MonitorInfo("Mailbox created: {0}", boxname);
+                AddMailbox(boxname);
+            }
+            return true;
+        }
+
+        public bool DeleteMailbox(MBoxRef mbox)
+        {   if(!mbox.Valid) return false;
+            using(ZIMapCommand.Delete cmd = new ZIMapCommand.Delete(factory))
+            {   if(cmd == null) return false;
+                if(mbox.Index == CurrentMailbox.Index) CloseMailbox();
+                cmd.Queue(mbox.Name);
+                if(!cmd.CheckSuccess(string.Format(
+                       ":Failed to delete '{0}': {1}",
+                       mbox.Name, cmd.Result.Message))) return false;
+                MonitorInfo("Mailbox deleted: {0}", mbox.Name);
+                DeleteMailboxInfo(mbox.Name);
+            }
+            return true;
         }
         
         // =============================================================================
@@ -310,20 +465,45 @@ namespace ZIMap
         
         public bool FindMailbox(ref string boxname, bool mustExist, out uint index)
         {   index = uint.MaxValue;
-            if(boxname == "." && !ResolveDotArg(ref boxname))
-                return false;
+            if(string.IsNullOrEmpty(boxname) || boxname == ".")
+            {   if(!currentMailbox.Valid)
+                {   MonitorError("No current Mailbox");
+                    return false;
+                }
+                boxname = currentMailbox.Name;
+            }
 
             ZIMapApplication.MailBox[] mailboxes = GetMailboxes(false);
             if(mailboxes == null) return false;
             
+            // check if numeric else strip any leading dot ...
+            uint uidx;
+            if(uint.TryParse(boxname, out uidx))
+            {   if(!ListedMailboxes.Valid)
+                {    MonitorError("Please run 'list' before using mailbox numbers");
+                    return false;
+                }
+                if(uidx == 0 || !ListedMailboxes.Next(uidx-1)) 
+                {   MonitorError("Not a valid mailbox number: {0}", uidx);
+                    return false;
+                }
+                boxname = ListedMailboxes.Name;
+            }
+            if(boxname[0] == '.') boxname = boxname.Substring(1);
             string frag = boxname;
+
             int idx = ZIMapApplication.MailboxFind(mailboxes, boxname);
             if(idx == -2 && mustExist)
-            {   Error("Name is not unique: " + boxname);
+            {   MonitorError("Name is not unique: " + boxname);
                 return false;
             }
             if(idx < 0 && mustExist)
-            {   Error("Mailbox not found: " + boxname);
+            {   if(boxname == "~" || application.User.StartsWith(boxname))
+                {   boxname = server.NamespaceDataUser.Prefix + "INBOX";
+                    MonitorInfo("Assuming '{0}' as root mailbox name", boxname);
+                    return FindMailbox(ref boxname, mustExist, out index);
+                }
+                MonitorError("Mailbox not found: " + boxname);
                 return false;
             }
             if(idx >= 0)
@@ -333,34 +513,66 @@ namespace ZIMap
                 if(boxname != frag)
                 {   boxname = frag; return true;
                 }
-                Error("Mailbox already exists: " + boxname);
+                MonitorError("Mailbox already exists: " + boxname);
                 return false;
             }
             return true;
+        }
+
+        /// <summary>
+        /// Iterator to enumerate all descendents of a root mailbox.
+        /// </summary>
+        /// <param name="rootIndex">
+        /// Index of the root in <see cref="Mailboxes"/>.
+        /// </param>
+        /// <param name="currentIndex">
+        /// Set on return, must initially be <see cref="uint.MaxValue"/>.
+        /// </param>
+        /// <returns>
+        /// On success <c>true</c> is returned.
+        /// </returns>
+        public bool RecurseMailboxes(MBoxRef rootMailbox, ref MBoxRef currentMailbox)
+        {   if(!rootMailbox.Valid)
+            {   currentMailbox = MBoxRef.Invalid;
+                return false;
+            }
+            if(!currentMailbox.Valid) 
+            {   currentMailbox = rootMailbox;
+                return true;
+            }
+
+            // get the friendly root name and append a hierarchie delimiter
+            uint rnsi;
+            string root = rootMailbox.Name;
+            root = server.FriendlyName(root, out rnsi);
+            root += server.NamespaceData(rnsi).Delimiter;
+            currentMailbox.Next();
+
+            // now scan the list of mailboxes ...
+            while(currentMailbox.Valid)
+            {   if(currentMailbox.Index != rootMailbox.Index)
+                {   uint cnsi;
+                    string name = server.FriendlyName(currentMailbox.Name, out cnsi);
+                    if(rnsi == cnsi && name.StartsWith(root)) return true;
+                }
+                currentMailbox.Next();
+            }
+            currentMailbox = MBoxRef.Invalid;
+            return false;
         }
         
         // =============================================================================
         // Check Mailbox arguments     
         // =============================================================================
        
-        public bool ResolveDotArg(ref string mailbox)
-        {   if(mailbox != ".") return true;
-            if(string.IsNullOrEmpty(currentMailbox))
-            {   Error("Cannot resolve '.' without current Mailbox");
-                return false;
-            }
-            mailbox = currentMailbox;
-            return true;
-        }
-        
         public bool CheckMailboxArgs(ref string[] args, bool mustExist)
         {   if(args == null || args.Length < 1)
-            {   Error("No mailbox(es) specified");
+            {   MonitorError("No mailbox(es) specified");
                 return false;
             }
             ZIMapApplication.MailBox[] mailboxes = GetMailboxes(false);
             if(mailboxes == null) return false;
-            
+/*            
             // a single "*" expands to all mailboxes ...
             if(args.Length == 1 && args[0] == "*" && mustExist)
             {   args = ZIMapConverter.StringArray(mailboxes.Length);
@@ -369,16 +581,14 @@ namespace ZIMap
                     args[irun] = mailboxes[irun].Name;
                 return true;
             }
-            
+*/            
             // loop over argument array to normalize names
             bool bok = true;
             for(int irun=0; irun < args.Length; irun++)
             {   if(args[irun] == "*")
-                {   Error("Incorrect use of '*'");
+                {   MonitorError("Incorrect use of '*'");
                     return false;
                 }
-                if(!ResolveDotArg(ref args[irun]))
-                    bok = false;
                 else if(!FindMailbox(ref args[irun], mustExist))
                     bok = false;
             }
@@ -387,7 +597,7 @@ namespace ZIMap
             if(bok) for(int irun=0; irun < args.Length; irun++)
             {   for(int icmp=irun+1; icmp < args.Length; icmp++)
                     if(args[irun] == args[icmp])
-                    {   Error("Duplicated mailbox name: " + args[irun]);
+                    {   MonitorError("Duplicated mailbox name: " + args[irun]);
                         bok = false;
                         break;
                     }
@@ -399,39 +609,32 @@ namespace ZIMap
         // Check item number arguments     
         // =============================================================================
 
-        public uint FindMail(string arg, bool useID, bool useUID)
-        {   if(GetHeaders() == null) return uint.MaxValue;
-            uint uarg;
-            if(!uint.TryParse(arg, out uarg))
-            {   Error("Not a number: " + arg);
+        public uint CheckItemArgs(string arg, bool useID, bool useUID)
+        {   uint[] uids = CheckItemArgs(new string[] { arg }, 0, useID, useUID, false);
+            if(uids == null || uids.Length < 1) return uint.MaxValue;
+            if(uids.Length > 1)
+            {   MonitorError("Only one item allowed");
                 return uint.MaxValue;
             }
-            if(!useID && !useUID)
-            {   if(uarg == 0) return uint.MaxValue;
-                uarg--;
-                return (uarg < Headers.Length) ? uarg : uint.MaxValue;
-            }
-            for(int irun=0; irun < Headers.Length; irun++)
-            {   if(useUID)
-                    if(uarg == Headers[irun].UID) return (uint)irun;
-                    else continue;
-                if(uarg == Headers[irun].Index) return (uint)irun;
-            }
-            return uint.MaxValue;
+            return uids[0];
         }
 
-        public uint[] CheckItemArgs(string[] args, uint argOffset, bool useID, bool useUID)
-        {   if(args == null || argOffset >= args.Length) return null;   
+        public uint[] CheckItemArgs(string[] args, uint argOffset, bool useID, bool useUID, bool defaultAll)
+        {   uint argLeng = (args == null) ? 0 : (uint)args.Length;
+            if(argOffset >= argLeng && !defaultAll)
+            {   MonitorError("No mail items selected");
+                return null;
+            }
             if(GetHeaders() == null) return null;
-            uint argCount = (uint)args.Length - argOffset;
-            
+            uint argCount = (argLeng > argOffset) ? argLeng - argOffset : 0;
+
             // special arg '*' ...
             uint ucnt = 0;
             uint[] uids = null;
-            if(args[argOffset] == "*" && argCount == 1)
+            if(argCount == 0 || (args[argOffset] == "*" && argCount == 1))
             {   ucnt = (uint)Headers.Length;
                 uids = new uint[ucnt];
-                for(int irun=0; irun < Headers.Length; irun++)
+                for(uint irun=0; irun < ucnt; irun++)
                     uids[irun] = Headers[irun].UID;
                 useID = useUID = false;
             }
@@ -442,7 +645,7 @@ namespace ZIMap
                 for(int irun=0; irun < uids.Length; irun++)
                 {   uint uarg;
                     if(!uint.TryParse(args[irun+argOffset], out uarg))
-                    {   Error("Not a number: " + args[irun+argOffset]);
+                    {   MonitorError("Not a number: " + args[irun+argOffset]);
                         return null;
                     }
                     uids[irun] = uarg;
@@ -456,7 +659,7 @@ namespace ZIMap
                 {   uint uarg;
                     string arg = args[iarg];
                     if(arg == "*")
-                    {   Error("Incorrect use of '*'");
+                    {   MonitorError("Incorrect use of '*'");
                         return null;
                     }
                     int idot = arg.IndexOf(":");
@@ -466,27 +669,27 @@ namespace ZIMap
                         if(range.Length != 2 ||
                            !uint.TryParse(range[0], out uarg) ||
                            !uint.TryParse(range[1], out uend))
-                               Error("Invalid range: " + arg);
+                               MonitorError("Invalid range: " + arg);
                         else
                         {   if(uend > Headers.Length || uarg > uend)
-                                Error("Number out of range: " + uend);
+                                MonitorError("Number out of range: " + uend);
                             else
                                 while(uarg <= uend) ulis.Add(Headers[uarg++ - 1].UID);
                         }
                         continue;
                     }
                     if(!uint.TryParse(arg, out uarg))
-                    {   Error("Not a number: " + arg);
+                    {   MonitorError("Not a number: " + arg);
                         return null;
                     }
                     if(uarg == 0 || uarg > Headers.Length)
-                    {   Error("Number out of range: " + uarg);
+                    {   MonitorError("Number out of range: " + uarg);
                         return null;
                     }
                     ulis.Add(Headers[uarg-1].UID);
                     
                 }
-                if(ulis.Count > 0) uids = ulis.ToArray();
+                uids = ulis.ToArray();
             }
             return uids;
         }
@@ -504,19 +707,19 @@ namespace ZIMap
 
             Array.Resize(ref boxes, boxes.Length + 1);
             boxes[boxes.Length-1].Name = fullBoxname;
-            boxes[boxes.Length-1].Delimiter = app.Factory.HierarchyDelimiter;
+            boxes[boxes.Length-1].Delimiter = factory.HierarchyDelimiter;
             boxes[boxes.Length-1].Attributes = ZIMapConverter.StringArray(0);
  
             // Allways sort (should by fast) ...
-            app.Server.MailboxSort(boxes);
+            server.MailboxSort(boxes);
             return true;
         }
         
-        public bool DeleteMailbox(string fullBoxname)
-        {   return DeleteMailbox(ref Mailboxes, fullBoxname);
+        public bool DeleteMailboxInfo(string fullBoxname)
+        {   return DeleteMailboxInfo(ref Mailboxes, fullBoxname);
         }
 
-        public bool DeleteMailbox(ref ZIMapApplication.MailBox[] boxes, string fullBoxname)
+        public bool DeleteMailboxInfo(ref ZIMapApplication.MailBox[] boxes, string fullBoxname)
         {   if(boxes == null) return false;
             
             for(int irun=0; irun < boxes.Length; irun++)
@@ -539,20 +742,20 @@ namespace ZIMap
 
         public bool FlagMails(uint[] items, bool useUID, bool bSet, bool bDeleted, 
                               bool bSeen, bool bFlagged, string[] custom)
-        {   if(items == null || items.Length < 1 || currentMailbox == null)
-            {   Error("No matching mail found");
+        {   if(items == null || items.Length < 1 || !currentMailbox.Valid)
+            {   MonitorError("No matching mail found");
                 return false;
             }
 
             // make sure that our current mailbox is open ...
             CommandRunning = true;
-            if(!app.MailboxOpen(currentMailbox, false))
+            if(!currentMailbox.Open(application, false))
                 return false;                       // could not reopen
-            currentReadonly = false;
             mailboxDetailed = false;                // message count changes
             Headers = null;                         // flags change
+            progress.Update(20);
             
-            using(ZIMapCommand.Store cmd = new ZIMapCommand.Store(app.Factory))
+            using(ZIMapCommand.Store cmd = new ZIMapCommand.Store(factory))
             {   if(cmd == null) return false;
                 cmd.UidCommand = useUID;
 
@@ -567,63 +770,54 @@ namespace ZIMap
                         cmd.AddName(cust);
                 cmd.Queue();
                 
-                app.MonitorProgress(10);
-                return cmd.Data.Succeeded;
+                progress.Done();
+                return cmd.CheckSuccess(":");
             }
         }
             
-        public bool CopyMails(uint[] items, bool useUID, string destination)
-        {   if(items == null || items.Length < 1)
-            {   Error("No matching mail found");
-                return false;
-            }
-
-            ZIMapAdmin.Info(string.Format(":Copying {0} mail{1} to mailbox '{2}'",
-                 items.Length, (items.Length == 1) ? "" : "s", destination));
+        public bool CopyMails(uint[] items, bool useUID, MBoxRef mbox)
+        {   if(!mbox.Valid || items == null || items.Length < 1) return false;
             
             // make sure that our current mailbox is open ...
             CommandRunning = true;
-            if(!app.MailboxOpen(currentMailbox, currentReadonly))
-                return false;                       // could not reopen
+            if(!currentMailbox.Open(application, true))
+                return false;                           // could not reopen
+            progress.Update(10);
+            
+            string dest = mbox.Name; 
+            if(mbox.Index == currentMailbox.Index)      // content changes
+                Headers = null; 
+            mailboxDetailed = false;                    // message count changes
 
-            if(!FindMailbox(ref destination, true)) return false;
-            app.MonitorProgress(10);
-            
-            if(destination == currentMailbox)       // content changes
-                Headers = null;
-            mailboxDetailed = false;                // message count changes
-            
-            using(ZIMapCommand.Copy cmd = new ZIMapCommand.Copy(app.Factory))
+            using(ZIMapCommand.Copy cmd = new ZIMapCommand.Copy(factory))
             {   if(cmd == null) return false;
-                
-                cmd.Queue(items, destination);
+                cmd.Queue(items, dest);
                 cmd.UidCommand = useUID;
-                app.MonitorProgress(10);
-                return cmd.Data.Succeeded;
+                return cmd.CheckSuccess(":");
             }
         }
         
-        public int ExpungeMails()
+        public uint ExpungeMails()
         {   // make sure that our current mailbox is open ...
             CommandRunning = true;
-            if(!app.MailboxOpen(currentMailbox, false))
-                return -1;                          // could not reopen
-            currentReadonly = false;
+            if(!currentMailbox.Open(application, false))
+                return uint.MaxValue;                   // could not reopen
 
             CommandRunning = true;
-            using(ZIMapCommand.Expunge exp = new ZIMapCommand.Expunge(app.Factory))
-            {   if(exp == null) return -1;
+            using(ZIMapCommand.Expunge exp = new ZIMapCommand.Expunge(factory))
+            {   if(exp == null) return uint.MaxValue;
             
                 exp.Queue();
-                app.MonitorProgress(30);
-                if(!exp.Data.Succeeded) return -1;
+                progress.Update(30);
+                if(!exp.CheckSuccess(":")) return uint.MaxValue;
                 uint[] expu = exp.Expunged;
                 if(expu == null) return 0;
-                int cnt = expu.Length;
+                uint cnt = (uint)expu.Length;
                 if(cnt > 0)
                 {   Headers = null;
-                    mailboxDetailed = false;        // message count changes
+                    mailboxDetailed = false;            // message count changes
                 }
+                progress.Done();
                 return cnt;
             }
         }
@@ -660,7 +854,7 @@ namespace ZIMap
                 }
 
                 if(wantRights && data.Rights == null)
-                {   if(cmd == null) cmd = new ZIMapCommand.MyRights(app.Factory);
+                {   if(cmd == null) cmd = new ZIMapCommand.MyRights(factory);
                     else            cmd.Reset();
                     cmd.Queue(boxes[irun].Name);
                     cmd.AutoDispose = false;
@@ -668,7 +862,7 @@ namespace ZIMap
                 }
 
                 if(wantQuota && data.QuotaRoot == null)
-                {   string[] roots = app.QuotaInfos(boxes[irun].Name,
+                {   string[] roots = application.QuotaInfos(boxes[irun].Name,
                                         out data.StorageUsage, out data.StorageLimit,
                                         out data.MessageUsage, out data.MessageLimit);   
                     if(roots == null || roots.Length < 1)
@@ -680,9 +874,168 @@ namespace ZIMap
                 if(wantRights && data.Rights == null && cmd.Rights != null)
                     data.Rights = cmd.Rights;
                 
-                app.MonitorProgress((uint)((irun * 100.0) / boxes.Length));
+                progress.Update((uint)irun, (uint)boxes.Length);
             }
             if(cmd != null) cmd.Dispose();
+            return true;
+        }
+
+        // =============================================================================
+        // Mailbox Export     
+        // =============================================================================
+
+        /// <summary>
+        /// Export mail from a single mailbox.
+        /// </summary>
+        /// <param name="mboxIndex">
+        /// Index of the mailbox in Mailboxes
+        /// </param>
+        /// <param name="uids">
+        /// A list of uids to be exported or <c>null</c>
+        /// </param>
+        /// <param name="mailTotal">
+        /// Can specify a total number of mails when multiple mailboxes are going to be
+        /// exported.
+        /// </param>
+        /// <param name="mailCounter">
+        /// Incremented for each exported mail.
+        /// </param>
+        /// <returns>
+        /// <c>true</c> on success.
+        /// </returns>
+        public bool ExportMailbox(MBoxRef mbox, bool bQuoted, 
+                                  uint[] uids, uint mailTotal, ref uint mailCounter)
+        {   if(!mbox.Valid) return false;
+            
+            uint ucnt = (uids == null) ? mbox.Messages : (uint)uids.Length;
+            if(ucnt > mailTotal) mailTotal = ucnt;
+            string mailbox = mbox.Name;
+            
+            // get rid of INBOX and prefix personal mailboxes with the account name
+            uint rnsi;
+            string fullname = server.FriendlyName(mailbox, out rnsi);
+            ZIMapServer.Namespace ns = server.NamespaceData(rnsi);
+            string prefix = ns.Prefix;
+            if(prefix != "" && fullname.StartsWith(prefix))     // strip the ns prefix 
+                fullname = fullname.Substring(prefix.Length);
+
+            // create the output file
+            application.Export.Delimiter = ns.Delimiter;
+            if (!application.Export.WriteMailbox(fullname)) return false;
+            if(ucnt == 0) {
+                MonitorInfo("Mailbox exported: {0} [no mails]", fullname.PadRight(32));
+                return true;
+            }
+            
+            // open the IMAP mailbox
+            if(currentMailbox.Index != mbox.Index)
+            {   ZIMapCommand.Examine exa = new ZIMapCommand.Examine(factory);
+                exa.Queue(mailbox);
+                if(!exa.CheckSuccess(":Cannot open Mailbox: " + mailbox))
+                    return false;
+            }
+            
+            // loop over mail items
+            ZIMapCommand.Generic current = null;
+            ZIMapFactory.Bulk bulk = factory.CreateBulk("FETCH", 4, uids != null);
+            ZIMapMessage msg = new ZIMapMessage();
+            uint ucur = 0;                      // current item/UID
+            uint uerr = 0;                      // error counter
+            uint urun = 0;                      // mail counter
+            uint urdy = 0;
+            string key = (uids == null) ? "item" : "UID";
+            while(urdy < ucnt)
+            {   // step 1: queue request and check for response ...
+                bool done = bulk.NextCommand(ref current);
+                ZIMapCommand.Fetch cmd = (ZIMapCommand.Fetch)current;
+
+                // step 2: check server reply for error ...
+                if(done) 
+                {   ucur = (uids == null) ? ++urdy : uids[urdy++];
+                    if (cmd.Items == null || cmd.Items.Length != 1) 
+                    {   MonitorError(!cmd.CheckSuccess() ?
+                            "Cannot fetch mail ({0}={1}): {2}" :
+                            "Mail not existing ({0}={1})", key, ucur, cmd.Result.Message);
+                        done = false; uerr++; 
+                    }
+                }
+
+                // step 3: process data sent by server ...
+                if(done)
+                {   ZIMapCommand.Fetch.Item item = cmd.Items[0];
+                    byte[] head = item.Literal(0);
+                    byte[] body = item.Literal(1);
+                    if (head == null || body == null) {
+                        MonitorError("Mail data incomplete ({0}={1})", key, ucur);
+                        uerr++; continue;
+                    }
+                    msg.Parse(head, true);
+
+                    // use the server's INTERNALDATE if we got it...
+                    DateTime date;
+                    string sdat;
+                    if (ZIMapFactory.FindInParts(item.Parts, "INTERNALDATE", out sdat))
+                        date = ZIMapConverter.DecodeIMapTime(sdat, true);
+                    else
+                        date = msg.DateBinary;
+
+                    // finally write mail data to file ...
+                    string flags = (item.Flags == null) ? null : string.Join(" ", item.Flags);
+                    if (!application.Export.WriteMail(msg.From, date, flags, head, item.Literal(1), bQuoted)) {
+                        MonitorError("Mail could not be written ({0}={1})", key, ucur);
+                        uerr++;
+                    }
+                    progress.Update(mailCounter++, mailTotal);
+                }
+
+                // step 4: create a new request
+                if(urun < ucnt)
+                {   ucur = (uids == null) ? ++urun : uids[urun++];
+                    cmd.Reset();
+                    cmd.Queue(ucur, "FLAGS INTERNALDATE BODY.PEEK[HEADER] BODY.PEEK[TEXT]");
+                }
+            }
+            bulk.Dispose();
+            MonitorInfo("Mailbox exported: {0} [{1,4} mails]", fullname.PadRight(32), urun - 1);
+            return (uerr == 0);
+        }
+        
+        public bool ImportMailbox(string mailbox, bool bFolders,
+                                  bool bNoFlags, bool bClean, long lcur, long llen, long lsiz)
+        {
+            ZIMapExport expo = application.Export;
+
+            // strip root name to see if a folder must be created
+            string root = currentMailbox.Name;
+            if(bFolders)
+            {   string[] parts = mailbox.Split(new char[] { currentNamespace.Delimiter });
+                parts[0] = currentMailbox.Name;
+                uint upar = (uint)parts.Length;
+                for(uint urun=1; urun < upar; urun++)
+                {   root = string.Join(currentNamespace.Delimiter.ToString(), parts, 0, (int)urun+1);
+                    if(ZIMapApplication.MailboxFind(Mailboxes, root) < 0 && !CreateMailbox(root))
+                        return false;
+                }
+            }
+            
+            if(!expo.ReadMailbox(mailbox)) return false;
+
+            uint position = 0;
+            string flags;
+            byte[] mail;
+            DateTime date;
+            ZIMapCommand.Append app0 = new ZIMapCommand.Append(factory);
+
+            for(;;) 
+            {   progress.Update((double)(lcur + position) / lsiz);
+                if(!expo.ReadMail(out mail, out date, out flags, out position, bClean))
+                    break;
+                app0.Queue(root, flags, date, mail);
+                if(!app0.CheckSuccess(":")) return false;
+                app0.Reset();
+            }
+
+            expo.IOStream = null;
             return true;
         }
     }
