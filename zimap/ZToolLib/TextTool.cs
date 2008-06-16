@@ -19,7 +19,14 @@ namespace ZTool
     // TextTool class - Routines to output Tables and Lists
     //==========================================================================
 
-    public class TextTool
+    /// <summary>
+    /// Helper to format tables and lists for console (or log file) output.
+    /// </summary>
+    /// <remarks>
+    /// The class supports simple line-style decoration and can be customized 
+    /// using a call back interface - see <see cref="IFormatter"/>
+    /// </remarks>
+    public static class TextTool
     {
         /// <summary>A value of <c>true</c> causes the <see cref="FormatterAscii" /> to be used.</summary>
         public static bool          UseAscii;
@@ -32,7 +39,8 @@ namespace ZTool
         public static string        Prefix;
         /// <summary>The formatter to used, set by <see cref="GetDefaultFormatter"/>.</summary>
         public static IFormatter    Formatter;
-        /// <summary>Value passed to <see cref="TextTool.Write(uint, string)"/>.</summary>
+        /// <summary>Value passed be the default formatters to
+        /// <see cref="LineTool.Write(uint, string)"/>.</summary>
         public static uint          WriteMode;
 
         /// <summary>Controls the horizontal alignment of text.</summary>
@@ -72,6 +80,10 @@ namespace ZTool
         // TextTool Callback Interface
         // =============================================================================
 
+        /// <summary>
+        /// This is a callback interface for the <see cref="TextTool"/> class that allows
+        /// some customization of output.
+        /// </summary>
         public interface IFormatter
         {
             char   GetBadChar();            // like "?"
@@ -82,10 +94,14 @@ namespace ZTool
             string GetIndexSeparator();     // like " | "
             string GetColumnSeparator();    // like "  " (2 spaces)
             string GetEllipses();           // like "..."
+            /// <summary>Called to output a line.</summary>
             void   WriteLine(string line);
         }
         
-        // Unicode Formatter (Table 37, DOS block drawing chars)
+        /// <summary>
+        /// An inheritable default implementation of <see cref="IFormatter"/> that 
+        /// uses UNICODE graphical characters for line-style decorations.
+        /// </summary>
         public class FormatterUnicode : IFormatter
         {
             public virtual char   GetBadChar()             {   return '█';     }
@@ -99,7 +115,10 @@ namespace ZTool
             public virtual void   WriteLine(string line)   {   LineTool.Write(TextTool.WriteMode, Prefix + line);    }
         }
         
-        // ASCII Formatter
+        /// <summary>
+        /// An inheritable default implementation of <see cref="IFormatter"/> that only 
+        /// uses 7-bit ASCII characters for line-style decorations.
+        /// </summary>
         public class FormatterAscii : IFormatter
         {
             public virtual char   GetBadChar()             {   return '?';     }
@@ -131,12 +150,22 @@ namespace ZTool
         // 
         // =============================================================================
 
+        /// <summary>
+        /// This structure describes a table column.
+        /// </summary>
+        /// <remarks>
+        /// This class is used by <see cref="TableBuilder"/>.  Some values get overridden
+        /// when the table is filled or formatted.
+        /// </remarks>
         public struct ColumnInfo
         {   public  uint        MaxWidth;
             public  uint        MinWidth;
             public  bool        RigthAlign;
         }
-        
+
+        /// <summary>
+        /// Used by <see cref="TextTool"/> to define and format tables.
+        /// </summary>
         public class TableBuilder
         {
             public  ColumnInfo[]    Columns;
@@ -445,9 +474,6 @@ namespace ZTool
         /// <summary>
         /// Outputs a string array as a formatted table.
         /// </summary>
-        /// <param name="formatter">
-        /// An optional output formatter (see <see cref="IFormatter"/>) or <c>null</c>.
-        /// </param>
         /// <param name="index">
         /// Specifies how to print an index column at the left, see remarks.
         /// </param>
@@ -468,7 +494,7 @@ namespace ZTool
         /// The maximum used width.
         /// </returns>
         /// <remarks>
-        /// For <c>index = 0<0> no index column is printed, <c>-1</c> prints index numbers
+        /// For <c>index = 0</c> no index column is printed, <c>-1</c> prints index numbers
         /// starting at 1, <c>-2</c> prints index numbers starting at 0. For positive index
         /// values the index is the count of characters for header and table lines that are
         /// used as index. 
@@ -716,7 +742,9 @@ namespace ZTool
                 uint usep = 0;
                 if((deco & Decoration.Column) != 0)
                 {   usep = (uint)Formatter.GetIndexSeparator().Length;
-                    if(indent+usep >= uwid) usep = indent = 0;
+                    if (indent + usep >= uwid)
+                    {   usep = 0; indent = 0;
+                    }
                     else uwid -= usep;
                 }
                     

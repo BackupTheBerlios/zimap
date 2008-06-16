@@ -19,30 +19,38 @@ namespace ZTool
     //==========================================================================
     
     /// <summary>
-    /// Class to parse command lines.
+    /// Class to parse command lines and to format help/usage output.
     /// </summary>
-    public class ArgsTool
+    /// <remarks>
+    /// The class implements some often used functionality.  Options can be given in
+    /// Windows style like <c>/myvalue=7</c> or in Linux style like <c>-myvalue:7</c>.
+    /// </remarks>
+    public static class ArgsTool
     {
-        /// <value>Usually this will contain the application name</value>
+        /// <summary>Usually this will contain the application name</summary>
         public static string AppName = System.Reflection.Assembly.GetEntryAssembly().GetName().Name;
 
         /// <summary>
-        /// This enumeration provide information on the validity of an option.   
+        /// Provides information on the validity of an option.   
         /// </summary>
+        /// <remarks>
+        /// This enumeration is used by <see cref="Option"/>.  Negative return values
+        /// from <see cref="Find"/> match the values of this enumeration.
+        /// </remarks>
         public enum OptionStatus
         {
-            /// <value>The option is valid</value>
+            /// <summary>The option is valid</summary>
             OK = 0,
-            /// <value>Undefined, given string matched no option name</value>
+            /// <summary>Undefined, the given string matched no option name</summary>
             Undefined = -1,
-            /// <value>Given string matches more than one option name</value>
+            /// <summary>The given string matches more than one option name</summary>
             Ambiguous = -2,
-            /// <value>Invalid use of an option (argument missing)</value>
+            /// <summary>Invalid use of an option (the value argument is missing)</summary>
             Invalid = -3
         }
 
         /// <summary>
-        /// Value representing an option argument.
+        /// A structure that represents option arguments with value and sub-value.
         /// </summary>
         /// <remarks>An <see cref="Option"/> array is returned be
         /// <see cref="Parse(string[], string[])"/>
@@ -50,10 +58,15 @@ namespace ZTool
         public struct Option
         {   /// <summary>The option name</summary>
             public string       Name;
+            /// <summary>The option value or <c>null</c> for no value</summary>
             public string       Value;
+            /// <summary>Array of option sub-values or <c>null</c> for no sub-values</summary>
             public string[]     SubValues;
-            public uint         Index;  // index in options[] 
-            public OptionStatus Error;  // 0 := ok, -1 := undefined, -2 := ambiguous
+            /// <summary>Index in the options[] array returned from
+            /// <see cref="Parse(string[], string[])"/>.</summary>
+            public uint         Index;
+            /// <summary>Status potentially indicating an error.</summary>
+            public OptionStatus Error;
         }
         
         /// <summary>
@@ -74,18 +87,51 @@ namespace ZTool
         /// Return values <c>&lt;= 0</c>can be interpreted as <see cref="OptionStatus"/>
         /// </remarks>
         public static int Find(string[] options, string name)
-        {   if(options == null || string.IsNullOrEmpty(name)) return -1;
-            int offset = -1;
-            for(int irun=0; irun+2 < options.Length; irun+=3)
-            {   if(string.IsNullOrEmpty(options[irun])) continue;
-                if(options[irun].StartsWith(name))
-                {   if(offset >= 0) return -2;
-                    offset = irun;
+        {   int offset = (int)OptionStatus.Undefined;
+            if(options != null && !string.IsNullOrEmpty(name)) 
+                for(int irun=0; irun+2 < options.Length; irun+=3)
+                {   if(string.IsNullOrEmpty(options[irun])) continue;
+                    if(options[irun].StartsWith(name))
+                    {   if(offset >= 0) return (int)OptionStatus.Ambiguous;
+                        offset = irun;
+                    }
                 }
-            }
             return offset;
         }
         
+        /// <summary>
+        /// Creates a list of options for a program's help/usage output.
+        /// </summary>
+        /// <param name="options">
+        /// An array of three strings per option line.
+        /// </param>
+        /// <param name="prefix">
+        /// An optional prefix for the first line (can be <c>null</c> or empty).
+        /// All following lines are right indented by the prefix length. 
+        /// </param>
+        /// <returns>
+        /// A string that can contain multiple lines.  The last (or only) line
+        /// does not end with a line break.
+        /// </returns>
+        /// <remarks>This function works together with <see cref="Param"/> in order
+        /// to simplify the implementation of a help or usage function in applications.
+        /// <para />
+        /// The three entries per option in <paramref name="options"/> are:
+        /// <list type="table">
+        /// <listheader>
+        /// <term>index</term><description>content</description>
+        /// </listheader>
+        /// <item><term>0</term><description>The name of the option.  If this field is
+        ///       empty or <c>null</c> the <see cref="List"/> function skips this entry.
+        ///       </description></item>
+        /// <item><term>1</term><description>If not empty or <c>null</c> this is the name
+        ///       of the argument value (used by <see cref="Param"/></description>).</item>
+        /// <item><term>2</term><description>Descriptive text for <see cref="List"/>.
+        ///       </description></item>
+        /// <item><term>...</term><description>Next option name and so on.</description>
+        ///       </item>
+        /// </list>
+        /// </remarks>
         public static string List(string[] options, string prefix)
         {   if(options == null) return "";
             int indent = -1;
@@ -95,7 +141,7 @@ namespace ZTool
                 if(!string.IsNullOrEmpty(options[irun])) 
                 {   if(indent < 0)
                     {   indent = prefix == null ? 0 : prefix.Length;
-                        sb.Append(prefix);
+                        if(indent > 0) sb.Append(prefix);
                     }
                     else if(indent > 0)
                         sb.Append(' ', indent);
@@ -207,13 +253,13 @@ namespace ZTool
         /// Controls how <see cref="Usage"/> will format the output. 
         /// </summary>
         public enum UsageFormat
-        {   /// <value>Prefix with 'Usage:  ' and program name</value>
+        {   /// <summary>Prefix with 'Usage:  ' and program name</summary>
             Usage,
-            /// <value>Prefix only with spaces (continuation line)</value>
+            /// <summary>Prefix only with spaces (continuation line)</summary>
             Cont,
-            /// <value>Prefix with spaces and program name</value>
+            /// <summary>Prefix with spaces and program name</summary>
             More,
-            /// <value>Output an option list, see <see cref="List"/></value>
+            /// <summary>Output an option list, see <see cref="List"/></summary>
             Options
         }
         

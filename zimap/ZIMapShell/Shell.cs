@@ -15,14 +15,18 @@ namespace ZIMap
     // =========================================================================
     class IMapCallback : ZIMapConnection.CallbackDummy
     {
-        public override bool Monitor (ZIMapConnection connection, ZIMapMonitor level, string message)
-        {   if(message == null) return true;
+        public override bool Monitor(ZIMapConnection connection, ZIMapConnection.Monitor level, 
+                                     string origin, string message)
+        {   if(origin == null || message == null) return true;
             switch(level)
-            {   case ZIMapMonitor.Debug:    LineTool.Extra(message); return true;
-                case ZIMapMonitor.Info:     LineTool.Info(message);  return true;
-                case ZIMapMonitor.Error:    LineTool.Error(message); return true;
+            {   case ZIMapConnection.Monitor.Debug:    
+                        LineTool.Extra("{0}: {1}", origin, message); return true;
+                case ZIMapConnection.Monitor.Info:    
+                        LineTool.Info("{0}: {1}", origin, message); return true;
+                case ZIMapConnection.Monitor.Error:
+                        LineTool.Error("{0}: {1}", origin, message); return true;
             }
-            return base.Monitor(connection, level, message);
+            return true;
         }
     }
     
@@ -47,7 +51,8 @@ namespace ZIMap
                 {   LineTool.Error("Connect failed");
                     return false;
                 }
-                connection.MonitorLevel = debug ? ZIMapMonitor.Debug : ZIMapMonitor.Error;
+                connection.MonitorLevel = debug ? ZIMapConnection.Monitor.Debug 
+                                                : ZIMapConnection.Monitor.Error;
                 protocol = connection.ProtocolLayer;
                 protocol.MonitorLevel = connection.MonitorLevel;
                 connection.TransportLayer.MonitorLevel = connection.MonitorLevel;
@@ -68,7 +73,7 @@ namespace ZIMap
                 }
                 LineTool.Info(sb.ToString());                
                 protocol.Send(sb.ToString());
-                ZIMapReceiveData data;
+                ZIMapProtocol.ReceiveData data;
                 protocol.Receive(out data);
                 if(!data.Succeeded)
                 {   LineTool.Error("Error: {0}", data.Message);
@@ -84,12 +89,12 @@ namespace ZIMap
                     protocol.Send(message);
                     uint tag;
                     string status;
-                    ZIMapReceiveState info;
+                    ZIMapProtocol.ReceiveState info;
                     do {
                         info = protocol.Receive(out tag, out status, out message);
                         LineTool.Message("{0} {1} {2}", tag, status, message);
                     }
-                    while(info == ZIMapReceiveState.Info);
+                    while(info == ZIMapProtocol.ReceiveState.Info);
                     
                     if(connection.IsTransportClosed) return false;
                 }

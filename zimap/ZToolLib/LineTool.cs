@@ -16,9 +16,17 @@ using System.Runtime.InteropServices;
 namespace ZTool
 {
     //==========================================================================
-    // LineTool class - Reading and parsing command lines
+    // LineTool class - Functions to do console input and output
     //==========================================================================
     
+    /// <summary>
+    /// The class provides functions to do console input and output and to write
+    /// to a log file.
+    /// </summary>
+    /// <remarks>
+    /// The class supports GNU readline on Linux, colored output and progress
+    /// reporting.
+    /// </remarks>
     public static class LineTool
     {
         /// <summary>
@@ -31,25 +39,35 @@ namespace ZTool
         /// <returns>
         /// Converted string -or- <c>null</c> (when the input was <c>null</c>).
         /// </returns>
+        /// <remarks>
+        /// Behind the 1st occurence of a single or double quote the routine
+        /// stops to compact multiple spaces to single spaces.
+        /// </remarks>
         public static string SimplifyWhiteSpace(string text)
         {   if(text == null || text == "") return text;
             
+            // get length, remove trailing spaces
+            int ilen = text.Length;
+            while(ilen > 0)
+                if(text[ilen-1] > 32) break;
+                else ilen--;
+            if(ilen <= 0) return "";
+            
             StringBuilder sb = new StringBuilder();
             bool skip = true;
-            int  last = 0;
+            bool quot = false;
             for(int irun=0; irun < text.Length; irun++)
             {   char c = text[irun];
                 if(c <= 32)
-                {   if(skip) continue;
-                    skip = true;
+                {   if(skip && !quot) continue;
+                    skip = true; c = ' ';
                 }
+                else if(c == '"' || c == '\'')
+                    quot = true;
                 else
-                {   skip = false;
-                    last = sb.Length + 1;
-                }
+                    skip = false;
                 sb.Append(c);
             }
-            sb.Length = last;
             return sb.ToString();
         }
         
@@ -153,7 +171,8 @@ namespace ZTool
         {   StringBuilder sb;
             if(!InitTTY) Initialize();                  // colors enabled?
             uint colf = mode & 0xff;
-            
+            bool cmod = (mode & TextAttributes.Continue) != 0;
+
             // case 1: no color
             if(!EnableColor || colf == 0)
             {   sb = new StringBuilder();
@@ -162,47 +181,61 @@ namespace ZTool
                 {   if(args == null) sb.Append(format);
                     else             sb.AppendFormat(format, args);
                 }
-            }
-            
-            // case 2: color with readline support
-            else if(EnableReadline)
-            {   sb = new StringBuilder();
-                if(colf > 100)
-                    sb.AppendFormat("\x001b[1;{0}m", colf-100);
-                else
-                    sb.AppendFormat("\x001b[{0}m", colf);
-                if(prefix != null)
-                {   sb.Append(prefix);
-                    sb.Append("\x001b[0m");
+                
+                // append spaces to override progress text
+                if(!cmod && progressLength > 0)
+                {   uint ulen = (uint)sb.Length;
+                    if(prefix != null) ulen -= (uint)prefix.Length;
+                    if(progressLength > ulen)
+                        sb.Append(' ', (int)(progressLength - ulen));
+                    progressLength = 0;
                 }
-                if(format != null)
-                {   if(args == null) sb.Append(format);
-                    else             sb.AppendFormat(format, args);
-                }
-                if(prefix == null)
-                    sb.Append("\x001b[0m");
             }
 
-            // case 3: color for console
             else
-            {   Console.ForegroundColor = TextAttributes.ToColor(colf);
-                if(prefix != null)
-                {   Console.Write(prefix);
-                    Console.ResetColor();
+            {   // override progress text
+                if(!cmod && progressLength > 0) Progress(null, null, null);
+                
+                // case 2: color with readline support
+                if(EnableReadline)
+                {   sb = new StringBuilder();
+                    if(colf > 256)
+                        sb.AppendFormat("\x001b[1;{0}m", colf & 255);
+                    else
+                        sb.AppendFormat("\x001b[{0}m", colf);
+                    if(prefix != null)
+                    {   sb.Append(prefix);
+                        sb.Append("\x001b[0m");
+                    }
+                    if(format != null)
+                    {   if(args == null) sb.Append(format);
+                        else             sb.AppendFormat(format, args);
+                    }
+                    if(prefix == null)
+                        sb.Append("\x001b[0m");
                 }
-                if(format != null)
-                {   if(args == null) Console.Write(format);
-                    else             Console.Write(format, args);
+
+                // case 3: color for console
+                else
+                {   Console.ForegroundColor = TextAttributes.ToColor(colf);
+                    if(prefix != null)
+                    {   Console.Write(prefix);
+                        Console.ResetColor();
+                    }
+                    if(format != null)
+                    {   if(args == null) Console.Write(format);
+                        else             Console.Write(format, args);
+                    }
+                    if(prefix == null)
+                        Console.ResetColor();
+                    if((mode & TextAttributes.Continue) == 0)
+                        Console.WriteLine();
+                    return;
                 }
-                if(prefix == null)
-                    Console.ResetColor();
-                if((mode & TextAttributes.Continue) == 0)
-                    Console.WriteLine();
-                return;
             }
             
             // write (case 1 and 2)
-            if((mode & TextAttributes.Continue) != 0)
+            if(cmod)
                 Console.Write(sb.ToString());
             else
                 Console.WriteLine(sb.ToString());
@@ -257,11 +290,74 @@ namespace ZTool
         }
 
         // =====================================================================
+        // Progress reporting
+        // =====================================================================
+
+        public static bool EnableProgress = true;
+        
+        public static uint ProgressBar = 25;
+
+        // length of the current progress output
+        private static uint progressLength;
+
+        public static void Progress(string head, uint percent, string tail)
+        {   if(percent > 100) percent = 100;
+            uint ucnt = (percent * ProgressBar + 99) / 100;
+            StringBuilder body = new StringBuilder();
+            if(ucnt > 0) body.Append('#', (int)ucnt);
+            if(ucnt < ProgressBar && !string.IsNullOrEmpty(tail))
+                tail = tail.PadLeft((int)(tail.Length + ProgressBar - ucnt));
+            Progress(head, body.ToString(), tail);
+        }
+            
+        public static void Progress(string head, string body, string tail)
+        {   uint ulen = 0;
+            if(!string.IsNullOrEmpty(head)) ulen += (uint)head.Length;
+            if(!string.IsNullOrEmpty(body)) ulen += (uint)body.Length;
+            if(!string.IsNullOrEmpty(tail)) ulen += (uint)tail.Length;
+
+            string fill = "";
+            if(progressLength > ulen) fill = fill.PadRight((int)(progressLength-ulen));
+
+            if(ulen > 0)
+            {   Console.Write("{0}{1}", PrefixMessage, head, ulen, progressLength);
+                if(!string.IsNullOrEmpty(body))
+                    WriteWithPrefix(Modes.Extra+TextAttributes.Continue, null, body, null);
+                Console.Write("{0}{1}\r", tail, fill);
+            }
+            else
+                Console.Write("{0}{1}\r", PrefixMessage, fill);
+            progressLength = ulen;
+        }
+
+        // =====================================================================
         // Setup and configuration
         // =====================================================================
 
+        /// <summary>
+        /// Handle color definitions and conversions between the .NET
+        /// <see cref="ConsoleColor"/> type and ANSI terminal attributes.
+        /// </summary>
+        /// <remarks>
+        /// This class is used be the text output functions of <see cref="LineTool"/>
+        /// to determine the output color.
+        /// </remarks>
         public class TextAttributes
         {
+            /// <summary>
+            /// Converts from <see cref="ConsoleColor"/> to ANSI terminal attributes.
+            /// </summary>
+            /// <param name="color">
+            /// The .NET color value.
+            /// </param>
+            /// <returns>
+            /// An ANSI value.  The lower 8 bits specify a color attribute and the
+            /// bit 0x100 indicates 'bright' mode.
+            /// </returns>
+            /// <remarks>
+            /// Not all <see cref="ConsoleColor"/> values are understood, on error <c>0</c> 
+            /// is returned.  See also <see cref="ToColor"/>.
+            /// </remarks>
             public static uint ToAnsi(ConsoleColor color)
             {   switch(color)
                 {   case ConsoleColor.DarkRed:     return 31;
@@ -270,48 +366,70 @@ namespace ZTool
                     case ConsoleColor.DarkBlue:    return 34;
                     case ConsoleColor.DarkMagenta: return 35;
                     case ConsoleColor.DarkCyan:    return 36;
-                    case ConsoleColor.Red:         return 131;
-                    case ConsoleColor.Green:       return 132;
-                    case ConsoleColor.Yellow:      return 133;
-                    case ConsoleColor.Blue:        return 134;
-                    case ConsoleColor.Magenta:     return 135;
-                    case ConsoleColor.Cyan:        return 136;
+                    case ConsoleColor.Red:         return 256+31;
+                    case ConsoleColor.Green:       return 256+32;
+                    case ConsoleColor.Yellow:      return 256+33;
+                    case ConsoleColor.Blue:        return 256+34;
+                    case ConsoleColor.Magenta:     return 256+35;
+                    case ConsoleColor.Cyan:        return 256+36;
                 }
                 return 0;
             }
             
+            /// <summary>
+            /// Convert ANSI terminal attributes back to .NET colors.
+            /// </summary>
+            /// <param name="ansi">
+            /// A color/brightness value (see <see cref="ToAnsi"/>).
+            /// </param>
+            /// <returns>
+            /// A .Net <see cref="ConsoleColor"/> value.
+            /// </returns>
+            /// <remarks>
+            /// Only a few ANSI values are understood, on error
+            /// <see cref="ConsoleColor.Black"/> is returned. See also <see cref="ToAnsi"/>.
+            /// </remarks>
             public static ConsoleColor ToColor(uint ansi)
             {   switch(ansi)
-                {   case 31:    return ConsoleColor.DarkRed;
-                    case 32:    return ConsoleColor.DarkGreen;
-                    case 33:    return ConsoleColor.DarkYellow;
-                    case 34:    return ConsoleColor.DarkBlue;
-                    case 35:    return ConsoleColor.DarkMagenta;
-                    case 36:    return ConsoleColor.DarkCyan;
-                    case 131:   return ConsoleColor.Red;
-                    case 132:   return ConsoleColor.Green;
-                    case 133:   return ConsoleColor.Yellow;
-                    case 134:   return ConsoleColor.Blue;
-                    case 135:   return ConsoleColor.Magenta;
-                    case 136:   return ConsoleColor.Cyan;
+                {   case 31:        return ConsoleColor.DarkRed;
+                    case 32:        return ConsoleColor.DarkGreen;
+                    case 33:        return ConsoleColor.DarkYellow;
+                    case 34:        return ConsoleColor.DarkBlue;
+                    case 35:        return ConsoleColor.DarkMagenta;
+                    case 36:        return ConsoleColor.DarkCyan;
+                    case 256+31:    return ConsoleColor.Red;
+                    case 256+32:    return ConsoleColor.Green;
+                    case 256+33:    return ConsoleColor.Yellow;
+                    case 256+34:    return ConsoleColor.Blue;
+                    case 256+35:    return ConsoleColor.Magenta;
+                    case 256+36:    return ConsoleColor.Cyan;
                 }
                 return ConsoleColor.Black;
             }
             
+            /// <summary>The color definintion used for normal text output.</summary>
             public uint         Normal = ToAnsi(ConsoleColor.Black);
+            /// <summary>Color definintion used for extra (debug) text output.</summary>
             public uint         Extra  = ToAnsi(ConsoleColor.Green);
+            /// <summary>Color definintion used for informational text output.</summary>
             public uint         Info   = ToAnsi(ConsoleColor.Blue);
+            /// <summary>Color definintion used to output error messages.</summary>
             public uint         Alert  = ToAnsi(ConsoleColor.Red);
             
+            /// <summary>Flag indicating that no CRLF should be added to the output.</summary>
             public const uint   Continue = 0x10000;
         }
         
         public static readonly TextAttributes Modes = new TextAttributes();
-        
+
+        /// <summary>Prefix for output with <see cref="Message"/></summary>
         public static string PrefixMessage = "    ";
         public static string PrefixDebug   = "*   ";
         public static string PrefixInfo    = "**  ";
         public static string PrefixError   = "*** ";
+
+        /// <summary>Characters written after the prompt text</summary>
+        public static string PromptSuffix  = "> ";
         
         public static bool EnableColor    = true;
         public static bool EnableReadline = true;
@@ -319,7 +437,21 @@ namespace ZTool
 
         private static bool InitTTY;
         private static bool IsTTY;
+        private static bool IsWindows;
 
+        /// <summary>
+        /// Gets the output size base on the current screen width
+        /// </summary>
+        /// <param name="umax">
+        /// When non-zero this is the maximum returned value. Used to limit
+        /// the output width.
+        /// </param>
+        /// <returns>
+        /// On Windows a Console resize will always be detected, under Linux/Mono
+        /// this works only when <see cref="EnableResize"/> is set.  This property
+        /// causes a P-Invoke call to a linux ioctl that returns the current console
+        /// size.
+        /// </returns>
         static public uint WindowWidth(uint umax)
         {   uint uwid = WinColumns();
             if(uwid == 0) uwid = 80;
@@ -350,12 +482,15 @@ namespace ZTool
         /// </remarks>
         public static void Initialize()
         {   InitTTY = true;
+
+            // stupid way to detects windos os ...
+            IsWindows = System.IO.Path.DirectorySeparatorChar == '\\';
             
             // Use ZTOOL_COLOR to disable colors
             if(EnableColor)
             {   string zcol = Environment("ZTOOL_COLOR");
                 if     (zcol == "off") EnableColor = false;
-                else if(zcol != "on")
+                else if(zcol != "on" && !IsWindows)
                 {   string term = Environment("TERM");
                     if(term != "linux" && term != "xterm") EnableColor = false;
                 }
@@ -389,8 +524,13 @@ namespace ZTool
         // Low level routine to read tty input
         private static string ReadLine(string prompt)
         {   if(prompt == null) return null;
-            prompt = string.Format("{0}> ", prompt);
-            if(!InitTTY) Initialize(); 
+            prompt = string.Format("{0}{1}", prompt, PromptSuffix);
+            if(!InitTTY) Initialize();
+
+            // override an enventual progress message
+            uint upro = (uint)prompt.Length;
+            if(upro < progressLength) Progress(null, null, null);
+            
             if(EnableReadline) return InvokeReadLine(prompt);
             Console.Write(prompt);
             return Console.ReadLine();
@@ -398,7 +538,11 @@ namespace ZTool
 
         private static uint WinColumns()
         {   if(!InitTTY) Initialize(); 
-            if(!EnableResize) return (uint)Console.WindowWidth;
+            if(!EnableResize)
+            {   uint uwid = (uint)Console.WindowWidth;
+                if(IsWindows) uwid--;   // prevent extra line
+                return uwid;
+            }
             uint rows, cols;
             InvokeWinsize(out rows, out cols);
             return cols;
