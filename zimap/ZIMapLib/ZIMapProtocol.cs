@@ -134,7 +134,7 @@ namespace ZIMap
             public override string ToString()
             {   System.Text.StringBuilder sb = new System.Text.StringBuilder();
                 int ninf = (Infos == null) ? 0 : Infos.Length;
-                sb.AppendFormat("Data:  State={0}  Tag={1}  Infos={2}   Literals={3}",
+                sb.AppendFormat("Data:  State={0}  Tag={1:x}  Infos={2}   Literals={3}",
                                 State, Tag, ninf, (Literals == null) ? 0 : Literals.Length);
                 for(int irun=0; irun < ninf; irun++)
                     sb.AppendFormat("\nInfo {0}: {1}", irun+1, Infos[irun]); 
@@ -265,7 +265,7 @@ namespace ZIMap
                         transport.Send(string.Format("{0} NOOP", ++send_cnt)))
                         // using the "fragment" send because the "normal" send would
                         // disable the socket timeout which we want for the 1st msg!
-                    {   MonitorError("ServerGreeting: Got no greeting, try to resync");
+                    {   MonitorInfo("ServerGreeting: Got no greeting, try to resync");
                         while (true)
                         {   rsta = Receive(out tag, out status, out message);
                             if(rsta == ReceiveState.Info)
@@ -463,7 +463,6 @@ namespace ZIMap
                     info = "transport timeout";
                 else   
                     info = "transport IO error";
-                
             }
             catch(Exception inner)
             {   info = inner;

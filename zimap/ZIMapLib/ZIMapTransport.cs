@@ -252,7 +252,6 @@ namespace ZIMap
                 lock(rdr_lines)
                 {   if (rdr_lines.Count > 0)            // has line in buffer
                         return true;
-                    rdr_wait = true;                    // request reader to stop
                 }
 
                 // wait for reader to exit - must call ReaderPoll() next !!!
@@ -545,14 +544,16 @@ namespace ZIMap
                 return false;
             }
 
+            byte[] data = null;
             if(fragment.Length > 0)
             {   MonitorInfo(startRequest ? "Send: request: {0}"
                                          : "Send: fragment: {0}", fragment);
-                byte[] data = System.Text.Encoding.ASCII.GetBytes(fragment);
-                stream.Write(data, 0, data.Length);
+                data = System.Text.Encoding.ASCII.GetBytes(fragment);
             }
             else
                 MonitorInfo( "Send: void");
+
+            if(data != null) stream.Write(data, 0, data.Length);
             startRequest = false;
             haveTimeout = false;
             stream.WriteByte(13);
@@ -749,7 +750,7 @@ namespace ZIMap
                     return -1;
                 }
                 Exception inner = ex.InnerException;
-                if(inner.InnerException != null && inner is IOException) inner = inner.InnerException;
+                if(inner != null && inner is IOException) inner = inner.InnerException;
                 if(inner is System.Net.Sockets.SocketException &&
                    (inner.Message.Contains("timed out") ||
                     inner.Message.Contains("period of time")))
@@ -760,6 +761,7 @@ namespace ZIMap
                 {   MonitorError("ReaderRead: exception: " + ex.Message);
                     if(inner != null && ex.Message != inner.Message)
                         MonitorInfo( "ReaderRead: exception: " + inner.Message);
+                    return 0;                           // connection closed
                 }
                 return -1;
             }
@@ -885,14 +887,16 @@ namespace ZIMap
                 }
                 
                 bool bok = rdr_lines.Count > 0;
-                if(bSingle) 
-                {   rdr_wait = true;                // single line: request stop
+                if(bSingle)                         // single line: request stop
+                {   rdr_wait = true;
                     if(bok) return true;
                 }
-                else
-                {   if(bok) return true;
-                    rdr_wait = bWait;               // for wait: request stop
+                else if(bok)                        // have data, don't stop
+                {   rdr_wait = false;   
+                    return true;
                 }
+                else                                // for wait: request stop
+                    rdr_wait = bWait;
             }
 
             // lock released - have no input

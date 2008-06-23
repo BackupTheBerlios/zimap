@@ -23,13 +23,43 @@ namespace ZIMap
     /// Class to import and export mail messages in mbox format (Application layer).
     /// </summary>
     /// <remarks>
-    /// The <b>application</b> layer it the top-most of three layers. The others
-    /// are the command and the protocol layers.
+    /// This class belongs to the <c>Application</c> layer which is the top-most of four
+    /// layers:
+    /// <para />
+    /// <list type="table">
+    /// <listheader>
+    ///   <term>Layer</term>
+    ///   <description>Description</description>
+    /// </listheader><item>
+    ///   <term>Application</term>
+    ///   <description>The application layer with the following important classes:
+    ///   <see cref="ZIMapApplication"/>, <see cref="ZIMapServer"/> and <see cref="ZIMapExport"/>.
+    ///   </description>
+    /// </item><item>
+    ///   <term>Command</term>
+    ///   <description>The IMap command layer with the following important classes:
+    ///   <see cref="ZIMapFactory"/> and <see cref="ZIMapCommand"/>.
+    ///   </description>
+    /// </item><item>
+    ///   <term>Protocol</term>
+    ///   <description>The IMap protocol layer with the following important classes:
+    ///   <see cref="ZIMapProtocol"/> and  <see cref="ZIMapConnection"/>.
+    ///   </description>
+    /// </item><item>
+    ///   <term>Transport</term>
+    ///   <description>The IMap transport layer with the following important classes:
+    ///   <see cref="ZIMapConnection"/> and  <see cref="ZIMapTransport"/>.
+    ///   </description>
+    /// </item></list>
     /// </remarks>
     public class ZIMapExport : ZIMapBase, IDisposable
     {
+        /// <summary>
+        /// Carries information about a mbox file.
+        /// </summary>
         public struct MailFile
-        {   /// <value>The unencoded (UNICODE) mailbox name</value>
+        {   /// <value>The unencoded (UNICODE) mailbox name, see 
+            /// <see cref="MailboxNameDecode"/></value>
             public string       MailboxName;
             /// <value>The filesystem name (encoded with version)</value>
             public string       FileName;
@@ -41,12 +71,14 @@ namespace ZIMap
             public ushort[]     VersionNumbers;
             /// <value><c>null</c> or array of version file names</value>
             public string[]     VersionNames;
+            /// <value>The hierarchy delimiter of MailboxName</value>
+            public char         Delimiter;
 
-            // see FullPath preperty
+            // see FullPath property
             private string      fullPath;
             // see FileInfo property 
             private FileInfo    info;
-            // see Valid property
+            // see Valid property (0:=no validated, 1:=mbox file, 2:=empty, 3:=error)
             private uint        valid;
 
             /// <summary>Return the full Path for FileName</summary>
@@ -54,6 +86,20 @@ namespace ZIMap
             {   get {   if(fullPath == null) fullPath = Path.Combine(Folder, FileName);
                         return fullPath;
                     }
+            }
+
+            /// <value>Generates the unencoded (UNICODE) mailbox name</value>
+            /// <remarks>The unencoded name depends on the current namespace. When the
+            /// owning <see cref="ZIMapExport"/> changes to a namespace with a different
+            /// hierarchy delimiter the unencoded name will eventually change.
+            /// </remarks>            
+            public string MailboxNameDecode(char delimiter)
+            {   if(MailboxName != null && Delimiter == delimiter) return MailboxName;
+                if(Delimiter == 0) Delimiter = delimiter;
+                string mbox = Path.GetFileNameWithoutExtension(FileName);
+                mbox = ZIMapExport.FileNameDecode(mbox, delimiter, out Latest);
+                if(MailboxName == null) MailboxName = mbox;    
+                return mbox;
             }
             
             /// <summary>Return a FileInfo for the current file</summary>
@@ -63,16 +109,25 @@ namespace ZIMap
                         return info;
                     }
             }
+
+            public bool Empty
+            {   get {   if(!Valid) return false;
+                        return valid == 2;
+                    }
+            }
             
             public bool Valid
-            {   get {   if(valid == 1) return true;
-                        if(valid >  1) return false;
-                        valid = 2;
+            {   get {   if(valid > 2) return false;
+                        if(valid > 0) return true;
+                        valid = 3;
                         try
                         {   string line = null;
                             StreamReader sr = new StreamReader(FullPath);
                             if(sr != null) line = sr.ReadLine();
-                            if(line == null) return false;
+                            if(line == null)        // no exception -> empty
+                            {   valid = 2;
+                                return true;
+                            }
                             if(line.Length > 10 && line.StartsWith("From "))
                             {   valid = 1;
                                 return true;
@@ -87,13 +142,15 @@ namespace ZIMap
             {   string vers = "";
                 if(VersionNames != null) 
                     vers = string.Format(" ({0} versions)", VersionNames.Length);
-                return string.Format("Mailbox '{0}'  Latest {1}{2}",
-                                         MailboxName, Latest, vers);
+                return string.Format("Mailbox: {0,-30} [Version={1}{2}{3}{4}]",
+                                     MailboxName, Latest, vers, 
+                                     Valid ? "" : " Invalid", Empty ? " Empty" : "");
             }
         }
 
         // --- class data ---        
 
+        private const string            ENVIRONMENT_EXPATH = "ZIMAP_EXPATH";  
         private const byte              SPACE = 32;
         private const byte              CR = (byte)'\r';
         private const byte              LF = (byte)'\n';
@@ -178,7 +235,7 @@ namespace ZIMap
             
         public string       Folder
         {   get {   return folder;  }
-            set {   if(Open(value, delimiter, false, false, false) == 0)
+            set {   if(Open(value, delimiter, false, false) == 0)
                         RaiseError(ZIMapException.Error.InvalidArgument);
                 }
         }
@@ -194,7 +251,7 @@ namespace ZIMap
 
         public string       Filename
         {   get {   return file;  }
-            set {   if(Open(value, delimiter, true, false, false) == 0)
+            set {   if(Open(value, delimiter, true, false) == 0)
                         RaiseError(ZIMapException.Error.InvalidArgument);
                 }
         }
@@ -218,30 +275,30 @@ namespace ZIMap
         {   get {   return versioning;  }
             set {   versioning = value; }
         }
-
-        // =============================================================================
-        // Public Interface
-        // =============================================================================
-        
-        public MailFile[] ExistingWithVersions(bool wantVersions)
-        {   if(!wantVersions) return Existing;
-            if(existing != null && hasVersions) return existing;
-            hasVersions = true;
-            existing = ParseFolder(folder, delimiter, true);
-            return existing;
-        }
+                
+        // =====================================================================
+        // Import/Export 
+        // =====================================================================
 
         public uint Open(string path, char delimiter, 
-                         bool allowFile, bool openWrite, bool allowCreate)
-        {   if(string.IsNullOrEmpty(path)) return 0;
+                         bool allowFile, bool allowCreate)
+        {   // check environment if BaseFolder is null
+            if(BaseFolder == null)
+            {   BaseFolder = System.Environment.GetEnvironmentVariable(ENVIRONMENT_EXPATH);
+                if(BaseFolder == null) BaseFolder = "";
+            }
+
+            // check call args
+            if(string.IsNullOrEmpty(path)) return 0;
             if(delimiter == 0) 
                 delimiter = ((ZIMapConnection)Parent).CommandLayer.HierarchyDelimiter;
             this.delimiter = delimiter;
             Dispose();
-            if(!string.IsNullOrEmpty(BaseFolder) && !Path.IsPathRooted(path))
+
+            if(BaseFolder != "" && !Path.IsPathRooted(path))
                 path = Path.Combine(BaseFolder, path);
             path = Path.GetFullPath(path);
-            
+   
             try {
                 bool exists = Directory.Exists(path);
                 bool isfile = exists ? false : File.Exists(path);
@@ -256,15 +313,15 @@ namespace ZIMap
                 {   if(isfile)
                     {   folder = Path.GetDirectoryName(path);
                         file   = Path.GetFileName(path);
-                        MonitorError("Using existing file: " + path);
+                        MonitorInfo("Using existing file: " + path);
                     }
                     else
                     {   folder = path;
-                        MonitorError("Using existing folder: " + path);
+                        MonitorInfo("Using existing folder: " + path);
                     }
                 }
                 else
-                {   if(/*!allowFile ||*/ !allowCreate)
+                {   if(!allowCreate)
                     {   MonitorError("Folder or file does not exist: " + path);
                         return 0;
                     }
@@ -281,19 +338,18 @@ namespace ZIMap
                     
                     if(allowFile)
                     {   file = path;
-                        File.Create(file);
-                        MonitorInfo( "Created file: " + file);
+                        File.Create(file).Close();
+                        MonitorInfo("Created file: " + file);
                     }
                     else
                     {   folder = path; file = null;
                         Directory.CreateDirectory(folder);
-                        MonitorInfo( "Created folder: " + folder);
+                        MonitorInfo("Created folder: " + folder);
                     }
                 }         
             }
             catch(Exception ex)
-            {
-                MonitorInfo( "Exception: " + ex.Message);
+            {   MonitorInfo("Exception: " + ex.Message);
                 folder = file = null;
                 return 0;
             }
@@ -301,15 +357,24 @@ namespace ZIMap
             serial = ++serialCounter;
             return serial;
         }
+
+        // =============================================================================
+        // Public Interface
+        // =============================================================================
+        
+        public MailFile[] xExistingWithVersions(bool wantVersions)
+        {   if(!wantVersions) return Existing;
+            if(existing != null && hasVersions) return existing;
+            hasVersions = true;
+            existing = ParseFolder(folder, delimiter, true);
+            return existing;
+        }
         
         /// <summary>
         /// Creates a file for a mailbox that can be used for writing.
         /// </summary>
         /// <param name="mailbox">
         /// A mailbox name (without namespace prefix).
-        /// </param>
-        /// <param name="delimiter">
-        /// The hierarchy delimiter used in the mailbox name.
         /// </param>
         /// <returns>
         /// On success <c>true</c> is returned.
@@ -409,8 +474,7 @@ namespace ZIMap
             existing = new MailFile[1];
             existing[0].FileName = file;
             existing[0].Folder = folder;
-            existing[0].MailboxName = FileNameDecode(Path.GetFileNameWithoutExtension(file), 
-                                                     delimiter, out existing[0].Latest);
+            existing[0].MailboxNameDecode(delimiter);
             MonitorInfo( "CurrentMailFiles: Single file: " + existing[0].MailboxName);
             return existing;  
         }
@@ -419,10 +483,32 @@ namespace ZIMap
         // Low level IO
         // =============================================================================
 
+        /// <summary>
+        /// Write a mail message to the output stream.
+        /// </summary>
+        /// <param name="from">
+        /// A <see cref="System.String"/>
+        /// </param>
+        /// <param name="date">
+        /// A <see cref="DateTime"/>
+        /// </param>
+        /// <param name="flags">
+        /// A <see cref="System.String"/>
+        /// </param>
+        /// <param name="header">
+        /// A <see cref="System.Byte"/>
+        /// </param>
+        /// <param name="body">
+        /// A <see cref="System.Byte"/>
+        /// </param>
         // <param name="quoted">Do not use Content-Length, and do From 
         // (un)quoting instead.</param>
-
-        
+        /// <returns>
+        /// A <see cref="System.Boolean"/>
+        /// </returns>
+        /// <remarks>
+        /// http://homepages.tesco.net/J.deBoynePollard/FGA/mail-mbox-formats.html
+        /// </remarks>
         public bool WriteMail(string from, DateTime date, string flags,
                                 byte[] header, byte[] body, bool quoted)
         {   if(string.IsNullOrEmpty(from))  return false;
@@ -453,7 +539,7 @@ namespace ZIMap
                     return WriteData(body, !blin);
                 }
                 
-                // loop over body line to apply "From " quoting
+                // loop over body lines to apply "From " quoting
                 uint upos = 0;
                 blin = false;
                 bool cont;
@@ -481,7 +567,7 @@ namespace ZIMap
         }
 
         // State of the parser used in ReadMail
-        private enum MboxState { SearchFrom, SearchLength, ReadHeader, ReadMail }
+        private enum MboxState { SearchFrom, SearchLength, ReadHeader, ReadBody, ReadDone }
 
         /// <summary>
         /// Used to read one mail message from the import data stream.
@@ -491,102 +577,167 @@ namespace ZIMap
         /// <param name="flags">IMap flags from a X-ZIMapFlags header.</param>
         /// <param name="clean">Remove all X- headers.</param>
         /// <param name="position">Position in file after reading.</param>
-        /// <returns></returns>
+        /// <returns><c>false</c> indicates an error but if <paramref name="mail"/>
+        /// is non-zero the mail data might still be usefull. 
+        /// </returns>
         public bool ReadMail(out byte[] mail, out DateTime date, out string flags,
                              out uint position, bool clean)
-        {   bool cont;
-            bool skip = true;
-            uint ucon = 0;
-            uint ulen = 0;
-            uint ubeg = 0;
-            position = mboffs;
+        {   string line;                            // scratch line
+            bool cont;                              // EOF indicator
+            bool bok  = true;                       // return status
+            bool skip = true;                       // skip on output
+            uint tail = 0;
+            uint ucon = 0;                          // from 'Content-Length'
+            uint ulen = 0;                          // length of input line
+            uint ubeg = 0;                          // input line start index
+            position = mboffs;                      // next line index
             byte[] data = mbdata;
             mail = null; date = DateTime.MinValue; flags = null;
-            MboxState state = MboxState.SearchFrom;
             MemoryStream ms = new MemoryStream();
-            do {
-                if (!skip) {
-                    ms.Write(data, (int)ubeg, (int)ulen);
-                    skip = true;
+            
+            // loop over input data - copy to output stream
+            
+            MboxState state = MboxState.SearchFrom; // initial engine state
+            do
+            {   if(!skip)                           // initially skip is true 
+                {   ms.Write(data, (int)ubeg, (int)ulen);
+                    skip = true;                    // default: don't copy data
                 }
-                ubeg = mboffs;
-                cont = FindCRLF(data, ref mboffs);
-                ulen = mboffs - ubeg;
-                string line;
+                ubeg = mboffs;                      // save start position
+                cont = FindCRLF(data, ref mboffs);  // get line length
+                ulen = mboffs - ubeg;               // length of the line
+                
+                // parser state engine.  When entering a state skip is true!
+                
                 switch (state) {
+                    
+                    // Ignore all data until a "From " line is found.  Eat that line.
+                    // Next state: SearchLength.
                     case MboxState.SearchFrom:
-                        if (ulen < 5) continue;
-                        if (data[ubeg] != 'F') continue;
-                        if (data[ubeg + 1] != 'r') continue;
-                        if (data[ubeg + 2] != 'o') continue;
-                        if (data[ubeg + 3] != 'm') continue;
-                        if (data[ubeg + 4] != ' ') continue;
+                        if(ulen < 5) continue;
+                        if(!IsFromLine(data,ubeg, ulen)) continue;
+                        if(data[ubeg] == '>') continue;         // not expected here
                         state = MboxState.SearchLength;
                         ucon = 0; flags = null;
                         // skip until start to address
-                        uint uskp = 5;
-                        while(uskp < ulen && data[uskp] <= SPACE) uskp++;
+                        uint uskp = 5 + ubeg;
+                        while(uskp < mboffs && data[uskp] <= SPACE) uskp++;
                         // skip the address
-                        while (uskp < ulen && data[uskp] > SPACE) uskp++;
-                        if(uskp >= ulen) continue;              // no date found
-                        line = Encoding.ASCII.GetString(data, (int)uskp, (int)(ulen-uskp));
+                        while (uskp < mboffs && data[uskp] > SPACE) uskp++;
+                        if(uskp >= mboffs) continue;            // no date found
+                        line = Encoding.ASCII.GetString(data, (int)uskp, (int)(mboffs-uskp));
                         date = ZIMapConverter.DecodeAscTime(line.Trim(), true);
                         continue;
 
+                    // Copy header lines to output (skip=false).  Wait for "Content-Length".
+                    // Goto state: ReadHeader (for x-lines),  next state: ReadHeader.
                     case MboxState.SearchLength:
-                        skip = false;
-                        if (ulen < 16 || data[ubeg] == 'x' || data[ubeg] == 'X')
-                            goto case MboxState.ReadHeader;
-                        if (data[ubeg] != 'C') continue;
-                        if (data[ubeg + 1] != 'o') continue;
+                        skip = false;                           // copy to output
+                        if(ulen < 16 || data[ubeg] == 'x' || data[ubeg] == 'X')
+                            goto case MboxState.ReadHeader;     // x-lines are special
+                        if(data[ubeg] != 'C') continue;
+                        if(data[ubeg + 1] != 'o') continue;     // cannot be "Content-Length"
                         line = Encoding.ASCII.GetString(data, (int)ubeg, (int)ulen - 2);
-                        if (line.ToLower().StartsWith("content-length:")) {
-                            line = line.Substring(15);
-                            if (!uint.TryParse(line, out ucon)) continue;
-                            state = MboxState.ReadHeader;
-                            skip = true;
+                        if(line.ToLower().StartsWith("content-length:")) 
+                        {   line = line.Substring(15);          // get the body length
+                            if(uint.TryParse(line, out ucon))
+                                state = MboxState.ReadHeader;   // ok, got length
+                            skip = true;                        // don't copy "Content-Length"
                         }
                         continue;
 
+                    // Copy header lines to output, special handling for x-lines
+                    // Next state: ReadBody (no content length) or ReadDone
                     case MboxState.ReadHeader:
-                        // empty line
-                        if (ulen <= 2) {
-                            state = MboxState.ReadMail;
-                            ms.Write(CRLF, 0, 2);
-                            uint uend = mboffs + ucon;
-                            if (uend > data.Length)
-                                Console.WriteLine("Want {0}  have {1}", uend, data.Length);
-                            else
+                        if (ulen <= 2)                          // empty line: end of header 
+                        {   if(ucon == 0)                       // no body or don't know length
+                            {   state = MboxState.ReadBody;     //    loop until From line
+                                skip = false;                   //    empty line follows header
+                            }
+                            else                                // have length, skip body
+                            {   state = MboxState.ReadDone;     //    eat empty line
+                                uint uend = mboffs + ucon;      //    skip body
+                                if(uend > data.Length)
+                                {   MonitorError("Invalid 'Content-Length' header" +
+                                                 "(wanted {0}  has {1})", uend, data.Length);
+                                    ucon = (uint)(data.Length - mboffs);
+                                    bok = false;                //    return error status
+                                }
+                                ms.Write(CRLF, 0, 2);           //    empty line and body...
                                 ms.Write(data, (int)mboffs, (int)ucon);
-                            mboffs += ucon;
+                                mboffs += ucon;
+                            }
                         }
-                        // header that begins with 'X-' or 'x-'
-                        else if ((data[ubeg] == 'x' || data[ubeg] == 'X') && data[ubeg + 1] == '-') {
-                            if (ulen < 14) {
-                                skip = false; continue;
+                        // header that begins with 'X-' or 'x-', search "X-ZIMap-Flags"
+                        else if ((data[ubeg] == 'x' || data[ubeg] == 'X') && data[ubeg + 1] == '-') 
+                        {   if (ulen < 14) 
+                            {   skip = clean; continue;         // skip or copy
                             }
                             line = Encoding.ASCII.GetString(data, (int)ubeg, (int)ulen - 2);
-                            if (!line.ToLower().StartsWith("x-zimap-flags:")) {
-                                skip = false; continue;
+                            if (!line.ToLower().StartsWith("x-zimap-flags:")) 
+                            {   skip = clean; continue;         // skip or copy
                             }
-                            flags = line.Substring(14).Trim();
-                        } else
-                            skip = false;
+                            flags = line.Substring(14).Trim();  // take flags, skip on output
+                        } 
+                        else skip = false;                      // other header, copy to output
                         continue;
 
-                    default:
+                    // Copy the body lines to output until a "From " line is reached.
+                    case MboxState.ReadBody:
+                        // the last empty line does not belong to the body!
+                        if(ulen <= 2 && tail == 0)
+                        {   tail = 1;
+                            continue;                           // don't copy now
+                        }
+                    
+                        if(IsFromLine(data, ubeg, ulen-2))      // stop before next mail
+                        {   if(data[ubeg] == '>')               //   escaped from ...
+                            {   ulen--; ubeg++; skip = false;
+Console.WriteLine("unquote");                        
+                                continue;
+                            }
+                            mail = ms.ToArray();
+                            position = mboffs = ubeg;
+                            return true;
+                        }
+                        if(!cont)                               // end of data
+                        {   if(ulen > 2)                        // incomplete last line
+                            {   MonitorInfo("Adding missing CR/LF to mail body");    
+                                ms.Write(data, (int)ubeg, (int)ulen);
+                                ms.Write(CRLF, 0, 2);
+                            }
+                            mail = ms.ToArray();
+                            position = mboffs;
+                            return bok;
+                        }
+                    
+                        // got a non-empty line of body
+                        if(tail == 1) 
+                        {   ms.Write(CRLF, 0, 2);
+                            if(ulen <= 2) continue;             // empty again
+                            tail = 0;
+                        }
+                        skip = false;
+                        continue;
+                    
+                    default:                                    // ReadDone
                         mail = ms.ToArray();
-                        if (ulen > 2)               // missing CRLF, undo read
+                        if (ulen > 2)                           // missing CRLF, undo read
                             mboffs = ubeg;
                         position = mboffs;
-                        return true;
+                        return bok;
                 }
             } while (cont);
             return false;
         }
 
+        /// <summary>
+        /// Check if the passed line starts with "From ".  Or something like ">From ".
+        /// </summary>
         private static bool IsFromLine(byte[] buffer, uint offset, uint count)
         {   if(count < 5) return false;
+            if(offset >= buffer.Length)
+                return false;
             while(buffer[offset] == '>')
             {   count--; offset++;
                 if(count < 5) return false;
@@ -599,11 +750,19 @@ namespace ZIMap
             return true;
         }
         
+        /// <summary>
+        /// Search CR/LF, update the current position, return EOF status
+        /// </summary>
+        /// <remarks>If the routine returns EOF usually the position has passed
+        /// the end of buffer (see below).  On return the CR/LF is not stripped.
+        /// <para />The last line may be incomplete and contain just a CR with
+        /// LF missing.  In such a case the position points to the CR character.
+        /// </remarks>
         private static bool FindCRLF(byte[] buffer, ref uint position)
         {   if(buffer == null) return false;
             uint uend = (uint)buffer.Length;
             if(uend == 0 || position >= uend) return false;
-            uend--;
+            uend--;                                     // last valid index
             
             for(uint irun=position; irun <= uend; irun++)
             {   // check for line break or end of buffer
@@ -614,7 +773,7 @@ namespace ZIMap
                 if(buffer[irun+1] != LF) continue;
                 position = irun + 2; return true;       // next line
             }
-            position = uend + 1; return false;
+            position = uend + 1; return false;          // reached end of buffer
         }
         
         // =============================================================================
@@ -872,16 +1031,19 @@ namespace ZIMap
         }
 
         /// <summary>
-        /// Decode a filename and get the file version
+        /// Decode a filename to a folder name and get the file version
         /// </summary>
         /// <param name="encoded">
-        /// A <see cref="System.String"/>
+        /// The encoded filename (without extension).
+        /// </param>
+        /// <param name="delimiter">
+        /// The local Hierarchy Delimiter that is used to generate the folder name.
         /// </param>
         /// <param name="version">
-        /// A <see cref="System.UInt32"/>
+        /// Receives the file version.
         /// </param>
         /// <returns>
-        /// A <see cref="System.String"/>
+        /// <c>true</c> on success.
         /// </returns>
         public static string FileNameDecode(string encoded, char delimiter, out ushort version)
         {   version = 0;
@@ -932,9 +1094,7 @@ namespace ZIMap
             {   string name = names[irun];
                 infos[irun].Folder = folder;
                 infos[irun].FileName = Path.GetFileName(name);
-                infos[irun].MailboxName = FileNameDecode(
-                    Path.GetFileNameWithoutExtension(name),                                                         
-                    delimiter, out infos[irun].Latest);
+                infos[irun].MailboxNameDecode(delimiter);                
             }
             
             // we must sort by mailbox name + version

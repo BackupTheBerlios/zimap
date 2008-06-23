@@ -329,7 +329,7 @@ namespace ZIMap
         // Get a TLS stream ...
         private Stream GetTlsStream()
         {
-#if MONO_BUILD               
+#if MONX_BUILD               
             Mono.Security.Protocol.Tls.SslClientStream sssl =
                  new Mono.Security.Protocol.Tls.SslClientStream(stream, server, true);
             if(sssl != null)
@@ -343,7 +343,7 @@ namespace ZIMap
                 sssl.Write(data, 0, 0);
                 return sssl;
             }
-#elif MS_BUILD
+#elif MONO_BUILD || MS_BUILD
             System.Net.Security.SslStream sssl = new System.Net.Security.SslStream(stream, true, //false,
                 new System.Net.Security.RemoteCertificateValidationCallback(ValCert));
             if(sssl != null)
@@ -356,7 +356,7 @@ namespace ZIMap
         }
 
         // Validate the server certificate ...
-#if MONO_BUILD
+#if MONX_BUILD
         // Callback for SslClientStream to ignore server certificate errors
         private bool ValCert(System.Security.Cryptography.X509Certificates.X509Certificate certificate,
                              int[] certificateErrors)
@@ -368,7 +368,7 @@ namespace ZIMap
             MonitorError("Server certificate is invalid. Error ignored!"); 
             return true;
         }
-#elif MS_BUILD
+#elif MONO_BUILD || MS_BUILD
         private bool ValCert(object sender,
             System.Security.Cryptography.X509Certificates.X509Certificate certificate,
             System.Security.Cryptography.X509Certificates.X509Chain chain, 
@@ -676,7 +676,7 @@ namespace ZIMap
         /// in this way.  The solution to this problem is scaling - the method 
         /// <see cref="Push"/> is called before running a worker with parameters that,
         /// for example scale the progress reported by that worker to an absolute range
-        /// of <c>0</c> to <c>40</c>.  After the worker has returned <see cref="Pop"/>
+        /// of <c>0</c> to <c>40</c>.  After the worker has returned <see cref="Pop(uint)"/>
         /// is called to remove scaling, and before the last worker is called Push is
         /// used again to set an absolute scaling of <c>40</c> to <c>100</c>. Scalings
         /// can be nested to any level.

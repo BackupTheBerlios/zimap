@@ -9,6 +9,7 @@
 #endregion
 
 using System;
+using System.IO;
 using System.Text;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
@@ -131,8 +132,8 @@ namespace ZTool
         {   return SimplifyWhiteSpace(ReadLine(prompt));
         }
 
-        /// <value>If set <c>true</c> all calls to <see cref="Confirm"/> will
-        /// return <c>true</c> without prompting the user.</value>
+        /// <summary>If set <c>true</c> all calls to <see cref="Confirm"/> will
+        /// return <c>true</c> without prompting the user.</summary>
         public static bool AutoConfirm;
         
         /// <summary>
@@ -167,12 +168,20 @@ namespace ZTool
         // Output routines
         // =====================================================================
         
+        // helper to do almost all output to console and log file
         static private void WriteWithPrefix(uint mode, string prefix, string format, object[] args)
         {   StringBuilder sb;
             if(!InitTTY) Initialize();                  // colors enabled?
             uint colf = mode & 0xff;
             bool cmod = (mode & TextAttributes.Continue) != 0;
 
+            // write data to stream ...
+            if(LogWriter != null && !cmod)
+            {   if(prefix != null) LogWriter.Write(prefix);
+                if(args == null)   LogWriter.WriteLine(format);
+                else               LogWriter.WriteLine(format, args);
+            }
+            
             // case 1: no color
             if(!EnableColor || colf == 0)
             {   sb = new StringBuilder();
@@ -228,8 +237,7 @@ namespace ZTool
                     }
                     if(prefix == null)
                         Console.ResetColor();
-                    if((mode & TextAttributes.Continue) == 0)
-                        Console.WriteLine();
+                    if(!cmod) Console.WriteLine();
                     return;
                 }
             }
@@ -293,8 +301,9 @@ namespace ZTool
         // Progress reporting
         // =====================================================================
 
+        /// <summary>Controls the progress bar display.</summary>
         public static bool EnableProgress = true;
-        
+        /// <summary>Width of the progress bar (in columns).</summary>
         public static uint ProgressBar = 25;
 
         // length of the current progress output
@@ -419,20 +428,41 @@ namespace ZTool
             /// <summary>Flag indicating that no CRLF should be added to the output.</summary>
             public const uint   Continue = 0x10000;
         }
+
+        /// <summary>A writer to which output is copied for logging purposes.</summary>
+        public static TextWriter LogWriter;
         
+        /// <summary>Reference to the default output attributes</summary>
         public static readonly TextAttributes Modes = new TextAttributes();
 
-        /// <summary>Prefix for output with <see cref="Message"/></summary>
+        /// <summary>Prefix for output with <see cref="Message" (default is "   ")/></summary>
         public static string PrefixMessage = "    ";
+        /// <summary>Prefix for output with <see cref="Debug" (default is "*  ")/></summary>
         public static string PrefixDebug   = "*   ";
+        /// <summary>Prefix for output with <see cref="Info" (default is "** ")/></summary>
         public static string PrefixInfo    = "**  ";
+        /// <summary>Prefix for output with <see cref="Error" (default is "***")/></summary>
         public static string PrefixError   = "*** ";
 
         /// <summary>Characters written after the prompt text</summary>
         public static string PromptSuffix  = "> ";
         
+        /// <summary>Enables the use of colors for console output</summary>
+        /// <remarks>The default is <c>true</c> when the output goes to a TTY.  Setting the 
+        /// environment variable <c>ZTOOL_COLOR=off</c> can be used to disable colors.
+        /// </remarks>   
         public static bool EnableColor    = true;
+
+        /// <summary>Enables the use of the GNU Readline library for input</summary>
+        /// <remarks>The default is <c>true</c> when the output goes to a TTY.  Setting the 
+        /// environment variable <c>ZTOOL_READLINE=off</c> can be used to disable this.
+        /// </remarks>   
         public static bool EnableReadline = true;
+        
+        /// <summary>Enables checks for console window resize</summary>
+        /// <remarks>The default is <c>true</c> when the output goes to a TTY.  Setting the 
+        /// environment variable <c>ZTOOL_RESIZE=off</c> can be used to disable resize checks.
+        /// </remarks>   
         public static bool EnableResize   = true;
 
         private static bool InitTTY;
@@ -530,12 +560,21 @@ namespace ZTool
             // override an enventual progress message
             uint upro = (uint)prompt.Length;
             if(upro < progressLength) Progress(null, null, null);
-            
-            if(EnableReadline) return InvokeReadLine(prompt);
-            Console.Write(prompt);
-            return Console.ReadLine();
+
+            string reply;
+            if(EnableReadline)
+                reply = InvokeReadLine(prompt);
+            else
+            {   Console.Write(prompt);
+                reply = Console.ReadLine();
+            }
+            if(LogWriter != null)
+            {   LogWriter.WriteLine("\n--- {0}{1}\n", prompt, reply);
+            }
+            return reply;
         }
 
+        // get the number of console columns
         private static uint WinColumns()
         {   if(!InitTTY) Initialize(); 
             if(!EnableResize)
@@ -548,6 +587,7 @@ namespace ZTool
             return cols;
         }
         
+        // helper to read environment variables
         private static string Environment(string name)
         {   string var = System.Environment.GetEnvironmentVariable(name);
             if(string.IsNullOrEmpty(var)) return "";

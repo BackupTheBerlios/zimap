@@ -20,18 +20,57 @@ namespace ZIMap
 
     /// <summary>
     /// The root of the IMap command layer that simplifies the execution of
-    /// IMap commands.
+    /// IMap commands (Command Layer).
     /// </summary>
     /// <remarks>
     /// This class manages IMap commands via the <see cref="ZIMapCommand"/> class.
-    /// <para/>
+    /// The important point is that this class 'owns' the commands and can control
+    /// their life cycle (see the <see cref="Commands"/> property for example). For
+    /// an application it appears as if commands get automatically excuted in 
+    /// background. After the application has called the <see cref="ZIMapCommnd.Queue"/>
+    /// method, it can simply access the server response 
+    /// (see <see cref="ZIMapCommand.Result"/>).  Obviously this will be blocking until
+    /// the server response got received, but any number of commands can be run in
+    /// parallel.  An application can easily 'batch' some commands and then try to
+    /// consume the results.  This programming style greatly reduces latency times
+    /// and helps to build fast IMap applications.
+    /// <para />
     /// Commands are created (see <see cref="CreateGeneric"/> and friends), are
     /// queued for execution (see <see cref="QueueCommand"/>) and last but not
     /// least they are associated with the server response
     /// (see <see cref="ExecuteCommands(bool)"/> and <see cref="Completed"/>).
-    /// <para/>
+    /// <para />
     /// Finally commands can be automatically or manually removed from the factory
     /// (see <see cref="DisposeCommands"/> and <see cref="EnableAutoDispose"/>).
+    /// <para />
+    /// This class belongs to the <c>Command</c> layer which is the second highest of four
+    /// layers:
+    /// <para />
+    /// <list type="table">
+    /// <listheader>
+    ///   <term>Layer</term>
+    ///   <description>Description</description>
+    /// </listheader><item>
+    ///   <term>Application</term>
+    ///   <description>The application layer with the following important classes:
+    ///   <see cref="ZIMapApplication"/>, <see cref="ZIMapServer"/> and <see cref="ZIMapExport"/>.
+    ///   </description>
+    /// </item><item>
+    ///   <term>Command</term>
+    ///   <description>The IMap command layer with the following important classes:
+    ///   <see cref="ZIMapFactory"/> and <see cref="ZIMapCommand"/>.
+    ///   </description>
+    /// </item><item>
+    ///   <term>Protocol</term>
+    ///   <description>The IMap protocol layer with the following important classes:
+    ///   <see cref="ZIMapProtocol"/> and  <see cref="ZIMapConnection"/>.
+    ///   </description>
+    /// </item><item>
+    ///   <term>Transport</term>
+    ///   <description>The IMap transport layer with the following important classes:
+    ///   <see cref="ZIMapConnection"/> and  <see cref="ZIMapTransport"/>.
+    ///   </description>
+    /// </item></list>
     /// </remarks>
     public abstract class ZIMapFactory : ZIMapBase, IDisposable
     {
@@ -56,9 +95,9 @@ namespace ZIMap
         // Accessors for properties
         // =====================================================================
 
-        /// <value>
+        /// <summary>
         /// On success an array of capability names -or- <c>null</c> on error.
-        /// </value>
+        /// </summary>
         /// <remarks>
         /// The factory caches the result, unless the proterty is manually
         /// set to <c>null</c> it will always return the same object. Please
@@ -78,9 +117,9 @@ namespace ZIMap
                 }
         }
 
-        /// <value>
+        /// <summary>
         /// Returns the parent <see cref="ZIMapConnection"/> object.
-        /// </value>
+        /// </summary>
         /// <remarks>
         /// This is a fast and simple accessor. 
         /// </remarks>
@@ -88,10 +127,10 @@ namespace ZIMap
         {   get {   return (ZIMapConnection)Parent;    }
         }
 
-        /// <value>
+        /// <summary>
         /// Controls if <see cref="DisposeCommands"/> is called when a command
         /// is disposed.
-        /// </value>
+        /// </summary>
         /// <remarks>
         /// The <see cref="ZIMapCommand.Dispose"/> method calls 
         /// <c>DisposeCommand(this, false)</c> if this property returns <c>true</c>.
@@ -101,9 +140,9 @@ namespace ZIMap
             set {   autoDispose = value; }
         }
         
-        /// <value>
+        /// <summary>
         /// <c>true</c> if there at least one command has an outstanding reply.
-        /// </value>
+        /// </summary>
         /// <remarks>
         /// Searches the list of command for an entry with a command state 
         /// of <see cref="ZIMapCommand.CommandState.Running"/>. This is much faster
@@ -117,9 +156,9 @@ namespace ZIMap
                 }
         }
         
-        /// <value>
+        /// <summary>
         /// Returns the server's Hierarchy Delimiter character.
-        /// </value>
+        /// </summary>
         /// <remarks>
         /// This command requires a valid login. Zero is returned if the
         /// delimiter character cannot be determined. On success the result
@@ -141,24 +180,24 @@ namespace ZIMap
                 }
         }
         
-        /// <value>
+        /// <summary>
         /// Return an array of all commands
-        /// </value>
+        /// </summary>
         public ZIMapCommand[] Commands
         {   get {   if(GetCommands() == null) return null;  // parent closed
                     return commands.ToArray();  
                 }
         }
         
-        /// <value>
+        /// <summary>
         /// Return an array of all completed commands (success or failed)
-        /// </value>
+        /// </summary>
         public ZIMapCommand[] CompletedCommands
         {   get {   return GetCommands(true);  }
         }
         
         /// <summary>Get commands that are running but not yet completed</summary>
-        /// <value>Return an array of all running commands</value>
+        /// <summary>Return an array of all running commands</summary>
         /// <remarks>
         /// When no command with state <see cref="ZIMapCommand.CommandState.Running"/>
         /// is found, an empty array is returned, see <see cref="GetCommands(bool)"/> for
@@ -168,9 +207,9 @@ namespace ZIMap
         {   get {   return GetCommands(false);  }
         }
 
-        /// <value>
+        /// <summary>
         /// Return the User name of the last ZIMapCommand.Login queued command.
-        /// </value>
+        /// </summary>
         /// <remarks>
         /// This parameter gets updated when the Login command executes Queue().
         /// </remarks>
@@ -414,9 +453,12 @@ namespace ZIMap
         /// The create command object casted to <see cref="ZIMapCommand.Generic"/>.
         /// </returns>
         /// <remarks>
-        /// Despite the return type this function for example creates a
-        /// <see cref="ZIMapCommand.Fetch"/> oject when the argument is FETCH.
-        /// The argument case is igored.
+        /// Despite the return type this function for example creates for example a
+        /// <see cref="ZIMapCommand.Fetch"/> object when the argument is FETCH.
+        /// <para />
+        /// The argument case can be igored in some cases and must either be lower or
+        /// upper (then the function capitalizes the 1st character) or the correct mixed
+        /// case (for example: <c>GetQuotaRoot</c>).
         /// <para/>
         /// For invalid comman names a <see cref="ZIMapException.Error.NotImplemented"/>
         /// error is raised.  
@@ -424,11 +466,11 @@ namespace ZIMap
         public ZIMapCommand.Generic CreateByName(string name)
         {   if(name == null || name.Length < 3) return null;
             if(GetCommands() == null) return null;          // parent closed
-            
                 
             object[] args = { this };
-            string full =  typeof(ZIMapCommand).FullName + "+" 
-                        +  char.ToUpper(name[0]) + name.Substring(1).ToLower();
+            if(name == name.ToUpper() || name == name.ToLower())
+                name = char.ToUpper(name[0]) + name.Substring(1).ToLower();
+            string full =  typeof(ZIMapCommand).FullName + "+" + name; 
             object inst = System.Reflection.Assembly.GetExecutingAssembly().CreateInstance(full,
                    false, System.Reflection.BindingFlags.CreateInstance, null, args, null, null);
             if(inst == null)
@@ -439,7 +481,20 @@ namespace ZIMap
             commands.Add(cmd);
             return cmd;
         }
-            
+
+        /// <summary>
+        /// Checks for a named IMap server capability
+        /// </summary>
+        /// <param name="capname">
+        /// A capability name (example: <c>ACL</c>).
+        /// </param>
+        /// <returns>
+        /// When the server has the capability <c>true</c> is returned.
+        /// </returns>
+        /// <remarks>The first time this methode is called the library issues a
+        /// <c>CAPABILITY</c> command the result stays cached unless a <c>null</c>
+        /// value is assigned to the <see cref="Capibilities"/> property.
+        /// </remarks>
         public bool HasCapability(string capname)
         {   return FindInStrings(Capabilities, 0, capname, false) >= 0;
         }
@@ -680,7 +735,7 @@ namespace ZIMap
                 if(current != null) uidx++;
                 if(uidx >= commands.Length) uidx = 0;
                 current = commands[uidx];
-                return current.IsPending;
+                return current.State != ZIMapCommand.CommandState.Created; 
             }
 
             /// <summary>

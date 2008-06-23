@@ -11,9 +11,10 @@
 using System;
 using System.Text;
 using System.Collections.Generic;
+using ZIMap;
 using ZTool;
 
-namespace ZIMap
+namespace ZIMapTools
 {
     public partial class ZIMapAdmin
     {     
@@ -21,63 +22,53 @@ namespace ZIMap
         // Tools        
         // =============================================================================
 
+        public static string FormatFilter(string message)
+        {   string qual = ZIMapAdmin.Cache.Data.Qualifier;
+            if(string.IsNullOrEmpty(qual)) return message;
+            return string.Format("{0} [Filter: {1}]", message, qual);
+        }
+
         public static bool FormatQuota(string mailbox, out string storage, out string message, out string qroot)
         {   storage = message = qroot = null;
-            uint uMsgUse, uMsgLim, uStoUse, uStoLim;
-
-            string[] root = App.QuotaInfos(mailbox, out uStoUse, out uStoLim, out uMsgUse, out uMsgLim);
-            if(root == null) return false;
-            if(root.Length < 1 || (uMsgLim == 0 && uStoLim == 0)) return true;
+            ZIMapApplication.QuotaInfo info;
+            if(!App.QuotaInfos(mailbox, out info)) return false;
+            if(!info.Valid || (info.MessageLimit == 0 && info.StorageLimit == 0)) return true;
             
-            qroot = root[0];
-            if(uStoLim > 0) storage = string.Format("Storage use: {0,6} kByte   limit: {1,6} kByte", 
-                                                    uStoUse/1024, uStoLim/1024);
-            if(uMsgLim > 0) message = string.Format("Message use: {0,6} mails   limit: {1,6} mails", 
-                                                    uMsgUse/1024, uMsgLim/1024);
+            if(info.StorageLimit > 0) 
+                storage = string.Format("Storage use: {0,6} kByte   limit: {1,6} kByte", 
+                                        info.StorageUsage/1024, info.MessageLimit/1024);
+            if(info.MessageLimit > 0) 
+                message = string.Format("Message use: {0,6} mails   limit: {1,6} mails", 
+                                        info.MessageUsage/1024, info.MessageLimit/1024);
+            qroot = info.QuotaRoot;
             return true;
         }
         
         // =============================================================================
-        //         
+        // List Formatter for mailboxes         
         // =============================================================================
-        public static bool ListMailboxes(ZIMapApplication.MailBox[] mailboxes,
-                                         bool bDetail, bool bRights, bool bQuota)
-        {
-            return ListMailboxes_(mailboxes, false, false, bDetail, bRights, bQuota);
-        }
         
-        // TODO: ListMailboxes header text argument          
-        public static bool ListMailboxes_(ZIMapApplication.MailBox[] mailboxes, bool bUsers,
-                                         bool bSubscr, bool bDetail, bool bRights, bool bQuota)
-        {   if(mailboxes == null) return false;
-            Cache.ListedMailboxes = new CacheData.MBoxRef(mailboxes, 0);
-            if(mailboxes.Length <= 0)
-            {   if(!bUsers && !string.IsNullOrEmpty(ZIMapAdmin.Cache.Qualifier))
-                    Message("No mailboxes, prefix '{0}'", ZIMapAdmin.Cache.Qualifier);
-                else
-                    Message(bUsers  ? "No visible users" : "No mailboxes");
-                return true;
-            }
+        // TODO: ListFolders header text argument          
+        private static bool ListFolders(CacheData.MBoxRef mailboxes, string title,
+                                        bool bSubscr, bool bDetail, bool bRights, bool bQuota)
+        {   uint ubox = mailboxes.Count;
+            if(ubox == 0) return false;
+            if(!App.EnableRights) bRights = false;
+            if(!App.EnableQuota)  bQuota  = false;
             
             uint ucol = 1;
             if(bDetail)  ucol += 3;
-            if(!bSubscr && !bUsers) ucol++;
+            if(bSubscr)  ucol++;
             if(bRights)  ucol++;
             if(bQuota)   ucol++;
             TextTool.TableBuilder table = GetTableBuilder(ucol);
             object[] data = new object[ucol];
             ucol = 0;
-
-            if    (bSubscr) data[ucol] = "Subscribed mailboxes";
-            else if(bUsers) data[ucol] = "IMap Users";
-            else if(string.IsNullOrEmpty(ZIMapAdmin.Cache.Qualifier))
-                data[ucol] = "Mailboxes";
-            else
-                data[ucol] = string.Format("Mailboxes ('{0}')", ZIMapAdmin.Cache.Qualifier);
+            data[ucol] = title;
             table.Columns[ucol].MaxWidth   = 20;
             table.Columns[ucol++].MinWidth = 34;    // name
 
-            if(!bSubscr && !bUsers)
+            if(bSubscr)
                 data[ucol++] = "Sub";
             if(bDetail)                             // messages
             {   data[ucol] = "Mails";
@@ -97,8 +88,6 @@ namespace ZIMap
                 table.Columns[ucol++].MinWidth = 12;
             }
 
-            Cache.LoadMailboxExtra(mailboxes, bRights, bQuota);
-
             // print a list ...
             uint nmsg = 0;
             uint nrec = 0;
@@ -106,66 +95,58 @@ namespace ZIMap
             uint scnt = 0;
             uint nlas = 0;                      // last NS seen
             bool bsep = false;                  // separator on NS change
-                                                // do we use namespaces?
-            bool nsok = App.Server.NamespaceDataOther.Valid;
-            ZIMapServer.Namespace nsUser = App.Server.NamespaceDataUser;
                 
             table.Header(data);
             string subs = Ascii ? "*" : "■";    // HACK: for mono no "✓";
-            for(uint irun = 0; irun < mailboxes.Length; irun++) 
-            {   uint   nidx = ZIMapServer.Personal;
-                string name = mailboxes[irun].Name;
-                if(nsok)                        // ok, use namespace
-                {   if(name != "INBOX")
-                        nidx = App.Server.FindNamespaceIndex(name, true);
-                    if(nidx != nlas)
-                    {   if(bsep) table.AddSeparator();
-                        nlas = nidx; 
-                    }
-                    bsep = true;
+
+            mailboxes.Reset();
+            while(mailboxes.Next())
+            {   // get name, copy MailBox - we need it frequently ...
+                ZIMapApplication.MailBox mailbox = mailboxes.Current;
+                uint   nidx = ZIMapServer.Personal;
+                string name = mailbox.Name; 
+                if(App.EnableNamespaces) name = App.Server.FriendlyName(name, out nidx);
+                if(nidx != nlas)
+                {   if(bsep) table.AddSeparator();
+                    nlas = nidx; 
                 }
-                else                            // don't use namespace
-                    nidx = ZIMapServer.Shared;
+                bsep = true;
                 
-                CacheData.MailboxExtra extra = (CacheData.MailboxExtra)mailboxes[irun].UserData; 
+                // fill table ..
                 ucol = 0;
-                if(nidx == ZIMapServer.Personal)
-                {   if(name == "INBOX")
-                        name = Account + " [INBOX]";
-                    else
-                    {   if(nsUser.Prefix != "")
-                           name = name.Substring(nsUser.Prefix.Length);
-                        name = Account + nsUser.Delimiter + name;
-                    }
-                }
                 data[ucol++] = name;
                     
-                if(!bSubscr && !bUsers)
-                {   data[ucol++] = mailboxes[irun].Subscribed  ? subs : "";
-                    if(mailboxes[irun].Subscribed) scnt++;
+                if(bSubscr)
+                {   data[ucol++] = mailbox.Subscribed  ? subs : "";
+                    if(mailbox.Subscribed) scnt++;
                 }
                 if(bDetail)
-                {   data[ucol++] = mailboxes[irun].Messages;
-                    data[ucol++] = mailboxes[irun].Recent;
-                    data[ucol++] = mailboxes[irun].Unseen;
+                {   data[ucol++] = mailbox.Messages;
+                    data[ucol++] = mailbox.Recent;
+                    data[ucol++] = mailbox.Unseen;
                 }
                 if(bRights)
-                    data[ucol++] = extra.Rights;
+                    data[ucol++] = mailboxes.ExtraRights;
                 if(bQuota)
-                {   string quota = "";
-                    if(!string.IsNullOrEmpty(extra.QuotaRoot) && extra.StorageLimit > 0)
-                    {   uint uuse = extra.StorageUsage; // / 1024;
-                        uint ulim = extra.StorageLimit; // / 1024;
-                        quota = string.Format("{0}k {1,3}%", uuse, (uint)((uuse*100.0)/ulim));
+                {   ZIMapApplication.QuotaInfo info;
+                    if(mailboxes.ExtraGetQuota(out info))
+                    {   if(info.QuotaRoot != mailbox.Name)
+                            data[ucol++] = string.Format("[Root={0}]", mailboxes.Search(info.QuotaRoot)+1);
+                        else
+                            data[ucol++] = string.Format("{0}k {1,3}%", info.StorageUsage,
+                                (uint)((info.StorageUsage*100.0)/info.StorageLimit), info.QuotaRoot);
                     }
-                    data[ucol++] = quota;
+                    else
+                        data[ucol++] = "";
                 }
                 table.AddRow(data);
-                nmsg += mailboxes[irun].Messages;
-                nrec += mailboxes[irun].Recent;
-                nuns += mailboxes[irun].Unseen;
+                
+                // build sums for footer line ...
+                nmsg += mailbox.Messages;
+                nrec += mailbox.Recent;
+                nuns += mailbox.Unseen;
             }
-            if(bDetail && !bSubscr)
+            if(bSubscr && bDetail)
                 table.Footer("Total", scnt, nmsg, nrec, nuns);
             else if(bDetail)
                 table.Footer("Total", nmsg, nrec, nuns);
@@ -265,50 +246,113 @@ namespace ZIMap
         }
 
         // =============================================================================
-        //         
+        // Public interface to List Mailboxes, Subscriptions and Users         
         // =============================================================================
-        public static bool ListSubscribed(ZIMapApplication.MailBox[] mailboxes,
-                                          bool bDetail, bool bRights, bool bQuota)
-        {   if(mailboxes == null) return false;
-            uint nbox = 0;
-            for(uint irun = 0; irun < mailboxes.Length; irun++) 
-                if(mailboxes[irun].Subscribed) nbox++;
-            if(nbox == 0)
-            {   Message("No subscribed mailboxes"); 
+
+        /// <summary>List all mailboxes</summary>
+        public static bool ListFolders(CacheData.MBoxRef mailboxes,
+                                       bool bDetail, bool bRights, bool bQuota)
+        {   if(mailboxes.IsNothing) return false;
+            Cache.ListedFolders = mailboxes;
+            if(mailboxes.Count == 0)
+            {   Message(FormatFilter("No Mailboxes")); 
                 return true;
             }
-            ZIMapApplication.MailBox[] subs;
-            if(nbox == mailboxes.Length)
-                subs = mailboxes;
-            else
-            {   subs = new ZIMapApplication.MailBox[nbox]; nbox = 0;  
-                for(uint irun = 0; irun < mailboxes.Length; irun++) 
-                    if(mailboxes[irun].Subscribed) subs[nbox++] = mailboxes[irun];
+            return ListFolders(mailboxes, FormatFilter("Mailboxes"), 
+                               true, bDetail, bRights, bQuota);
+        }
+
+        /// <summary>List subscribed mailboxes only</summary>
+        public static bool ListSubscribed(CacheData.MBoxRef mailboxes,
+                                          bool bDetail, bool bRights, bool bQuota)
+        {   if(mailboxes.IsNothing) return false;
+            Cache.ListedFolders = mailboxes;
+            
+            // count subscriptions ...
+            uint usub = 0;
+            mailboxes.Reset();
+            while(mailboxes.Next())
+                if(mailboxes.Subscribed) usub++;
+            if(usub == 0)
+            {   Message(FormatFilter("No subscribed mailboxes")); 
+                return true;
             }
-            return ListMailboxes_(subs, false, true, bDetail, bRights, bQuota);
+
+            // create subset ...
+            if(usub != mailboxes.Count)
+            {   ZIMapApplication.MailBox[] subs = new ZIMapApplication.MailBox[usub];
+                usub = 0;  
+                mailboxes.Reset();
+                while(mailboxes.Next()) 
+                    if(mailboxes.Subscribed) subs[usub++] = mailboxes.Current;
+                mailboxes = new CacheData.MBoxRef(subs);
+            }
+            
+            return ListFolders(mailboxes, FormatFilter("Subscribed Mailboxes"),
+                               false, bDetail, bRights, bQuota);
+        }
+
+        /// <summary>List the user root mailboxes in a brief format</summary>
+        public static bool ListUsers()
+        {   CacheData.MBoxRef users = Cache.Data.Users;
+            Cache.ListedUsers = users;
+            if(users.Count == 0)
+            {   Message("No users");
+                return true;
+            }
+            return ListFolders(users, "IMap Users", false, false, false, false);
         }
 
         // =============================================================================
         //         
         // =============================================================================
-        public static bool ListUsers(bool otherUsers)
-        {
-            ZIMapApplication.MailBox[] users = ZIMapAdmin.Cache.GetUsers(otherUsers);
-            if(users == null) return false;
-            return ListMailboxes_(users, true, false, false, true, true);
-        }
 
-        // =============================================================================
-        //         
-        // =============================================================================
-        public static bool ListRights()
-        {
+        /// <summary>Prints a list of rights per mailbox</summary>
+        /// <param name="entries">
+        /// An array of string arrays.  Each entry stand for a table row.  The entries
+        /// are simply arrays of 3 or 4 strings.  If the 1st string is empty this denotes
+        /// another right for the same mailbox (mailbox name not printed again). 
+        /// </param>
+        public static bool ListRights(string[][] entries)
+        {   if(entries == null || entries.Length < 1)
+            {   Error("No matching mailboxes");
+                return true;
+            }
+
+            TextTool.TableBuilder table = GetTableBuilder(4);
+            table.IndexMode = 1;
+            table.Columns[0].MinWidth = 10;
+            table.Columns[1].MinWidth = 10;
+            table.Columns[1].RigthAlign = false;
+            table.Columns[2].MinWidth = 10;
+            table.Columns[2].RigthAlign = false;
+            table.Columns[3].MinWidth = 10;
+            table.Columns[3].RigthAlign = false;
+            table.Header("Mailbox", "User", "Grant", "Deny");
+
+            string last = null;
+            for(int ibox=0; ibox < entries.Length; ibox++)
+            {   string[] entry = entries[ibox];
+                string curr = entry[0];
+                if(curr != "")                      // space flags more rights
+                {   if(last != curr && last != null) table.AddSeparator();
+                    last = curr;
+                    uint nidx;                    
+                    if(App.EnableNamespaces)        // use account name
+                        entry[0] = App.Server.FriendlyName(curr, out nidx);
+                }
+                table.AddRow(entry);
+            }
+            table.Footer("");
+            table.PrintTable();
             return true;
         }
 
         // =============================================================================
         //         
         // =============================================================================
+
+        // helper for ShowInfo
         private static uint ListOutput(uint mode, string prefix, string message)
         {   if(message == null) message = "";
             if(prefix[0] == ' ') prefix += "  ";
@@ -345,6 +389,7 @@ namespace ZIMap
                 ListOutput(2, "Greeting  ", App.Connection.ProtocolLayer.ServerGreeting);
                 ListOutput(1, "Type      ", App.Server.ServerType + " (Subtype: " + 
                                             App.Server.ServerSubtype + ")");
+                ListOutput(1, "Admin     ", App.Server.IsAdmin ? "yes" : "no");
                 
                 ListOutput(2, "Capability", string.Join(" ", App.Factory.Capabilities));
                 ListOutput(1, "Rights    ", App.EnableRights ? "enabled" : "disabled");
@@ -355,7 +400,7 @@ namespace ZIMap
                                          App.Server.HasLimit("MESSAGE") ? "yes" : "no");
                 ListOutput(1, "Quota     ", sout);
 
-                ListOutput(5, "Namespace ", "Personal=" + App.Server.NamespaceDataUser + "\n" +
+                ListOutput(5, "Namespace ", "Personal=" + App.Server.NamespaceDataPersonal + "\n" +
                                             "Others  =" + App.Server.NamespaceDataOther + "\n" +
                                             "Shared  =" + App.Server.NamespaceDataShared + "\n" +
                                             "Search  =" + App.Server.NamespaceDataSearch);
@@ -377,10 +422,14 @@ namespace ZIMap
                            + " (DEBUG build)"
 #endif                           
                            );
+
+                App.Export.Open(null, (char)0, false, false);
+                string bfld = ZIMapExport.BaseFolder;
+                ListOutput(2, "Path      ", (bfld == "") ? "[not set]" : bfld);
                 
-                long mem1 = GC.GetTotalMemory(false) / 1024; Cache.Clear();
+                long mem1 = GC.GetTotalMemory(false) / 1024; Cache.Data.Clear(CacheData.Info.All);
                 long mem2 = GC.GetTotalMemory(true)  / 1024;
-                ListOutput(3, "Memory    ", string.Format("{0} kByte (minimum is {1} kByte)",
+                ListOutput(5, "Memory    ", string.Format("{0} kByte (minimum is {1} kByte)",
                                                           mem1, mem2));
                 return true;
                 
@@ -394,9 +443,9 @@ namespace ZIMap
                 ZIMapApplication.MailBox mbox = (ZIMapApplication.MailBox)what;
                 ListOutput(0, "          ", "Mailbox Information");
                 string msg = mbox.Name;
-                if(mbox.Name == Cache.CurrentMailbox.Name)
+                if(mbox.Name == Cache.Data.Current.Name)
                     msg = string.Format("{0} (current {1})", msg,
-                          Cache.CurrentMailbox.ReadOnly ? "Read-Only" : "Writable");
+                          Cache.Data.Current.ReadOnly ? "Read-Only" : "Writable");
                 else
                     msg += " (not current)";
                 ListOutput(1, "Mailbox   ", msg);
@@ -424,7 +473,7 @@ namespace ZIMap
             // -----------------------------------------------------------------
             if(what is uint[])
             {   uint[] uarg = (uint[])what;
-                ZIMapApplication.MailInfo[] mails = Cache.Headers;
+                ZIMapApplication.MailInfo[] mails = Cache.Data.Headers;
                 
                 uint uuid = uarg[0];
                 uint urun;
@@ -447,7 +496,10 @@ namespace ZIMap
                     cmd.Queue(uuid, "BODY");
                 if(!cmd.CheckSuccess("Failed to get status")) return false;
                 if((uarg[1] & 2) != 0)
-                {   if(cmd.Result.Literals.Length != 1) return false;
+                {   if(cmd.Result.Literals == null || cmd.Result.Literals.Length < 1)
+                    {  Info("Message has no body");
+                       return true;
+                    }
                     mesg.ParseBody(cmd.Result.Literals[0], 0);
                 }
                 string[] parts = cmd.Items[0].Parts;

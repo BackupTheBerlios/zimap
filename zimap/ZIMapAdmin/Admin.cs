@@ -11,13 +11,14 @@
 using System;
 using System.Threading;
 using System.Collections.Generic;
+using ZIMap;
 using ZTool;
 
-namespace ZIMap
+namespace ZIMapTools
 {
 
     /// <summary>
-    /// Testing
+    /// A command line tool to administer mailboxes on an IMap server.
     /// </summary>
     public partial class ZIMapAdmin
     {
@@ -53,6 +54,8 @@ namespace ZIMap
         private static string[] Commands;
         // running from command line
         private static bool     Batch;
+        // running a command
+        private static bool     Executing;
 
         // =============================================================================
         // Execution State
@@ -68,10 +71,23 @@ namespace ZIMap
         private static string       UnparsedCommand;
         // user confirmed warning
         private static bool         UseIdOk;
+        // progress reporting
+        private static ZIMapConnection.Progress ProgressReporting;
 
         // =============================================================================
         // Console and Debug support
         // =============================================================================
+
+
+        public static void Fatal(string message, params object[] arguments)
+        {   LineTool.Error(message, arguments);
+            System.Environment.Exit(1);
+        }
+
+        public static void Fatal(string message)
+        {   LineTool.Error(message);
+            System.Environment.Exit(1);
+        }
 
         public static void Error(string message)
         {   ErrorCalled = true;
@@ -199,7 +215,13 @@ namespace ZIMap
             {   if(Thread.CurrentThread.ThreadState == ThreadState.AbortRequested)
                     return true;
                 ZIMapAdmin.Error("Error [exception]: {0}", error.Message);
-                System.Environment.Exit(2);
+                if(!Executing)
+                {   if(LineTool.LogWriter != null) LineTool.LogWriter.Close();
+                    ZIMapAdmin.Error("Terminating the program");
+                    System.Environment.Exit(2);
+                }
+                if(Debug == 0) LineTool.Info(
+                    "Ignoring the error. Use the 'debug 2' command to enable debug output.");
                 return false;
             }
         }
@@ -219,6 +241,32 @@ namespace ZIMap
         /// </returns>
         public static bool Execute(string cmd)
         {   UnparsedCommand = cmd;
+            
+            // Debug stuff
+#if DEBUG            
+            if(cmd == "xxx")
+            {    ZIMapFactory.Bulk bulk = new ZIMapFactory.Bulk(App.Factory, "Examine", 8, false);
+                uint urub = 0;
+                uint urdy = 0;
+                uint umax = 5000;
+                ZIMapCommand.Generic cmdb = null;
+                while(urdy < umax)
+                {   if(bulk.NextCommand(ref cmdb))
+                    {   cmdb.CheckSuccess(); urdy++;
+                        ProgressReporting.Update(urdy, umax);
+                        cmdb.Reset();
+                    }
+                    if(urub++ < umax)
+                    {   //cmdb.AddLiteral("unfug");
+                        cmdb.AddString("unfug");
+                        cmdb.AddString("unfugxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+                        cmdb.Queue();
+                    }
+                }
+                bulk.Dispose();
+                return true;
+            }    
+#endif            
             List<string> opts = new List<string>();
             List<string> args = new List<string>();
             if(!string.IsNullOrEmpty(cmd))
@@ -351,6 +399,8 @@ namespace ZIMap
             string exec = "Execute" + cmd[0].ToString().ToUpper() + cmd.Substring(1);
             if(Debug > 0 || Batch)
                 Message("Command: {0} {1}", cmd, args == null ? "" : string.Join(" ", args));
+            ProgressReporting.Reset();
+            Executing = true;
 
             try {
                 object[] arga = null;
@@ -388,8 +438,8 @@ namespace ZIMap
                 return false;
             }
             finally
-            {   if(!Cache.Enabled) Cache.Clear();
-                Cache.CommandRunning = false;
+            {   if(!Cache.Data.Caching) Cache.Data.Clear(CacheData.Info.All);
+                Executing = false;
             }
         }
 
@@ -571,7 +621,7 @@ namespace ZIMap
                         "Change the quota settings of a mailbox.  Default unit for storage is " +
                         "kByte (use -byte or -mbyte to override).  Use a value of 0 to clear a " +
                         "quota setting.  Without storage argument the current quota are shown.",
-            "rights",   "all read write none custom deny", "{mailbox} [{rights} [{user}...]]",
+            "rights",   "recurse all read write none custom deny", "{mailbox} [{rights} [{user}...]]",
                         "Change the rights for a mailbox.  The flags -all -read -write -none " +
                         "and -custom are exclusive.  By default rights are granted, the -deny " +
                         "flag  adds 'negative' rights.  When -custom is give a list of custom " +
@@ -734,24 +784,19 @@ namespace ZIMap
         public static void Main(string[] args)
         {   uint confirm = 0;
             ZIMapConnection.TlsModeEnum tlsmode = ZIMapConnection.TlsModeEnum.Automatic;
-            ZIMapExport.BaseFolder = System.Environment.GetEnvironmentVariable("BACKUPFOLDER");
              
             // --- step 1: parse command line arguments
             
             ArgsTool.Option[] opts = ArgsTool.Parse(options, args, out Commands);
             if(opts == null)
-            {   LineTool.Write("Invalid command line. Try /help to get usage info.");
-                return;
-            }
+                Fatal("Invalid command line. Try /help to get usage info.");
+
             foreach(ArgsTool.Option o in opts)
             {   if(o.Error == ArgsTool.OptionStatus.Ambiguous)
-                {   LineTool.Write("Ambiguous option: {0}", o.Name);
-                    return;
-                }
+                    Fatal("Ambiguous option: {0}", o.Name);
                 if(o.Error != ArgsTool.OptionStatus.OK)
-                {   LineTool.Write("Invalid option: {0}. Try /help to get usage info", o.Name);
-                    return;
-                }
+                    Fatal("Invalid option: {0}. Try /help to get usage info", o.Name);
+
                 switch(o.Name)
                 {   case "?":
                     case "help":    Usage();
@@ -774,15 +819,11 @@ namespace ZIMap
                                     break;
                     case "log":     Log = o.Value;
                                     if(string.IsNullOrEmpty(Log))
-                                    {   LineTool.Write("No log file specified");
-                                        return;
-                                    }
+                                        Fatal("No log file specified");
                                     break;
                     case "debug":   Debug = 1;
                                     if(o.Value != null && !uint.TryParse(o.Value, out Debug))
-                                    {   LineTool.Write("Invalid debug level: {0}", o.Value);
-                                        return;
-                                    }
+                                        Fatal("Invalid debug level: {0}", o.Value);
                                     break;
                     case "server":  Server = o.Value;
                                     break;
@@ -797,9 +838,7 @@ namespace ZIMap
                                     break;
                     case "timeout":
                                     if(!uint.TryParse(o.Value, out Timeout))
-                                    {   LineTool.Write("Invalid timeout: {0}", o.Value);
-                                        return;
-                                    }
+                                        Fatal("Invalid timeout: {0}", o.Value);
                                     break;
                     case "account": Account = o.Value;
                                     break;
@@ -815,6 +854,15 @@ namespace ZIMap
             opts = null;                                    // memory can be freed
             GetTableBuilder(0);                             // init TextTool
 
+            if(Log != null)
+            {   try 
+                {   LineTool.LogWriter = new System.IO.StreamWriter(Log);
+                }
+                catch(Exception ex)
+                {   Fatal("Failed to open logfile: " + ex.Message);
+                }
+            }
+            
             // --- step 2: prompt for missing parameters
 
             if(Commands != null && Commands.Length > 0)
@@ -826,9 +874,7 @@ namespace ZIMap
                 if     (Server  == null)  missing = "server";
                 else if(Account == null)  missing = "account";
                 if(missing != null)
-                {   Error("Please add a '-{0}' option to your command line", missing);
-                    return;
-                }
+                    Fatal("Please add a '-{0}' option to your command line", missing);
             }
             else
             {   if(confirm == 2) LineTool.AutoConfirm = true;
@@ -866,16 +912,15 @@ namespace ZIMap
             DebugLevel(Debug);
 
             if(!App.Connect(Account, Password, tlsmode))
-            {   Error("Failed to connect");
-                return;
-            }
+                Fatal("Failed to connect");
+            ProgressReporting = App.Connection.ProgressReporting;
             Cache = new CacheData(App);
             
             if(Output >= OutLevel.Info)
                 Info("Server: " + App.Connection.ProtocolLayer.ServerGreeting);
             if(!App.Factory.HasCapability("IMAP4rev1"))
                 Error("WARNING: This is not an IMAP4rev1 server!");
-
+            
             // --- step 4: Open mailbox, Execute Commands
 
             if(MailBoxName == null || Execute("open -write " + MailBoxName))
@@ -901,11 +946,27 @@ namespace ZIMap
                 // prompt for commands...
                 else
                 {   Message("Entering command loop. Type 'help -list' to see the list of commands...");
+                    if(App.Server.IsAdmin && App.EnableNamespaces)
+                    {   Message("You are logged-in as an administrator - changing default namespace...");
+                        Execute("user *");
+                    }
                     while(true)
-                    {   string cmd = Cache.CurrentMailbox.Name;
-                       // cmd = string.IsNullOrEmpty(cmd) ? "Command" : "Command:" + cmd;
-                        if(string.IsNullOrEmpty(cmd)) cmd = "-no mailbox-";
-                        cmd = LineTool.Prompt(cmd);
+                    {   System.Text.StringBuilder sb = new System.Text.StringBuilder();
+                        string qual = Cache.Data.Qualifier;
+                        if(qual == null) qual = "[no qualifier]";
+                        else
+                        {   uint nsid = App.Server.FindNamespace(qual, false);
+                            if(nsid == ZIMapServer.Personal)    qual = "[personal]";
+                            else if(nsid == ZIMapServer.Others) qual = "[other users]";
+                            else if(nsid == ZIMapServer.Shared) qual = "[shared folders]";
+                            else if(nsid == ZIMapServer.Search) qual = "[search results]";
+                        }
+                        sb.Append(qual);
+                        sb.Append(Ascii ? ':' : '■');
+                        string cmd = Cache.Data.Current.Name;
+                        if(string.IsNullOrEmpty(cmd)) sb.Append("[no mailbox]");
+                        else                          sb.Append(cmd);
+                        cmd = LineTool.Prompt(sb.ToString());
                         if(string.IsNullOrEmpty(cmd)) break;
                         Execute(cmd);
                     }
@@ -915,6 +976,7 @@ namespace ZIMap
             // --- step 5: Disconnect and exit
 
             App.Disconnect();
+            if(LineTool.LogWriter != null) LineTool.LogWriter.Close();
             return;
         }
     }

@@ -740,7 +740,7 @@ namespace ZIMap
                 MonitorError("{0}{1} command failed: {2}", 
                              errorMessage, command, Result.Message);
             else
-                MonitorError(errorMessage);
+                MonitorError(errorMessage, command, Result.Message);
             return false;
         }
 
@@ -1085,12 +1085,14 @@ namespace ZIMap
             /// An array of mail UIDs or IDs (see the <see cref="UidCommand"/> property).
             /// </param>
             /// <param name="what">
-            /// Command parameters in IMap syntax.
+            /// Command parameters in IMap syntax, where the COPY commands treats the
+            /// value as a mailbox name and FETCH as a list. 
             /// </param>
             public bool Queue(uint [] items, string what)
             {   AddSequence(items);
-                if(command == "FETCH") AddList(what);
-                else                   AddDirect(what);
+                if     (command == "COPY")  AddMailbox(what);
+                else if(command == "FETCH") AddList(what);
+                else                        AddDirect(what);
                 return Queue();
             }
        }

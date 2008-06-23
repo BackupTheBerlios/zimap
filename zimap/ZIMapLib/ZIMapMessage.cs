@@ -466,9 +466,25 @@ namespace ZIMap
                     data[upos+2] == CRLF[0] && data[upos+3] == CRLF[1]);
         }
         
-
+        /// <summary>
+        /// Extract the URL or textual part of an E-Mail address.
+        /// </summary>
+        /// <param name="address">
+        /// A <see cref="System.String"/>
+        /// </param>
+        /// <param name="url">
+        /// A <see cref="System.Boolean"/>
+        /// </param>
+        /// <returns>
+        /// A <see cref="System.String"/>
+        /// </returns>
         public static string AddressParse(string address, bool url)
         {
+            if(!url)
+            {   ZIMapException.Throw(null, ZIMapException.Error.NotImplemented, "AddressParse for non-url");
+                return null;
+            }
+            
             // blabla <x@x>
             // x@y (blabla)
             if(address == null || address.Length < 3) return address;
@@ -477,14 +493,16 @@ namespace ZIMap
             {   int isep = address.LastIndexOf('(');
                 if(isep < 2) return address;
                 if(address[isep-1] == ' ') isep--;
-                return address.Substring(0, isep);
+                address = address.Substring(0, isep);
             }
-            if(address[ilas] == '>')
+            else if(address[ilas] == '>')
             {   int isep = address.LastIndexOf('<');
                 if(isep < 0) return address;
-                return address.Substring(isep+1, ilas-(isep+1));
+                address = address.Substring(isep+1, ilas-(isep+1));
             }
-            return address;
+            else 
+                return address;
+            return address.Replace(' ', '§');       // must not contain spaces
         }
         
         // =====================================================================
@@ -506,7 +524,7 @@ namespace ZIMap
         /// Converts an RFC 2822 formatted time string to <see cref="DateTime"/>.
         /// </summary>
         /// <param name="rfc822time">
-        /// A string in the format: "Sun, 18 May 2008 11:20:06 +0200"
+        /// A string in the format: "Sun, 18 May 2008 11:20:06 +0200 (XXX)"
         /// </param>
         /// <param name="toUTC">
         /// If <c>true</c>  set the DateTime structure to UTC.
@@ -519,7 +537,10 @@ namespace ZIMap
         /// The RFC time is always local time.
         /// </remarks>
         public static DateTime DecodeTime(string rfc822time, bool toUTC)
-        {   DateTime res;
+        {   if(string.IsNullOrEmpty(rfc822time)) return DateTime.MinValue; 
+            DateTime res;
+            int idx = rfc822time.IndexOf('(');
+            if(idx > 0) rfc822time = rfc822time.Substring(0, idx);
             if(!DateTime.TryParse(rfc822time, out res))
                 return DateTime.MinValue;
             return toUTC ? res.ToUniversalTime() : res;
@@ -554,6 +575,9 @@ namespace ZIMap
         // BodyInfo
         // =====================================================================
         
+        /// <summary>
+        /// Information about a constituent part of a message body, see <see cref="BodyInfo"/>.
+        /// </summary>
         public class BodyPart
         {   public string       Part;
             public uint         Level;
@@ -581,7 +605,10 @@ namespace ZIMap
                 return sb.ToString();
             }
         }
-        
+
+        /// <summary>
+        /// Information about a message body, returned from <see cref="ParseBodyInfo"/>
+        /// </summary>
         public class BodyInfo
         {   public string       Info;
             public BodyPart[]   Parts;

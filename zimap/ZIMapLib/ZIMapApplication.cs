@@ -19,11 +19,40 @@ namespace ZIMap
     //==========================================================================
 
     /// <summary>
-    /// Class that implement the Application layer of ZIMap.
+    /// Class that implements some high level functionality (Application layer).
     /// </summary>
     /// <remarks>
-    /// The application layer is the top-most of the four ZIMapLib layers. The others
-    /// are the command, the protocol and the transport layers.
+    /// Methods in this class usually issue more than a single IMap command or
+    /// depend on some application state.
+    /// <para />
+    /// This class belongs to the <c>Application</c> layer which is the top-most of four
+    /// layers:
+    /// <para />
+    /// <list type="table">
+    /// <listheader>
+    ///   <term>Layer</term>
+    ///   <description>Description</description>
+    /// </listheader><item>
+    ///   <term>Application</term>
+    ///   <description>The application layer with the following important classes:
+    ///   <see cref="ZIMapApplication"/>, <see cref="ZIMapServer"/> and <see cref="ZIMapExport"/>.
+    ///   </description>
+    /// </item><item>
+    ///   <term>Command</term>
+    ///   <description>The IMap command layer with the following important classes:
+    ///   <see cref="ZIMapFactory"/> and <see cref="ZIMapCommand"/>.
+    ///   </description>
+    /// </item><item>
+    ///   <term>Protocol</term>
+    ///   <description>The IMap protocol layer with the following important classes:
+    ///   <see cref="ZIMapProtocol"/> and  <see cref="ZIMapConnection"/>.
+    ///   </description>
+    /// </item><item>
+    ///   <term>Transport</term>
+    ///   <description>The IMap transport layer with the following important classes:
+    ///   <see cref="ZIMapConnection"/> and  <see cref="ZIMapTransport"/>.
+    ///   </description>
+    /// </item></list>
     /// </remarks>
     public class ZIMapApplication : ZIMapBase
     {
@@ -44,7 +73,6 @@ namespace ZIMap
                                 progress;
         
         private uint            fetchBlock = 50;
-        private uint            exportSerial;
         
         // feature flags ...
         private bool            enableNamespaces = true;
@@ -58,6 +86,12 @@ namespace ZIMap
         private string          mailboxName;
         private uint            mailboxTag;
         private bool            mailboxReadonly;
+        private ZIMapServer.Namespace
+                                mailboxNamespace;
+
+        // see ExportRead, ExportWrite
+        private uint            exportSerial;
+        private bool            exportWrite;
         
         // =====================================================================
         // Accessors
@@ -82,7 +116,10 @@ namespace ZIMap
         /// This would reset the propertie's value to <c>false</c>.
         /// </remarks>
         public bool EnableNamespaces
-        {   get {   return enableNamespaces;  }
+        {   get {   if(enableNamespaces && server != null)  // really enabled? 
+                        enableNamespaces = server.NamespaceDataPersonal.Valid;
+                    return enableNamespaces;
+                }
             set {   if(enableNamespaces == value) return;   
                     enableNamespaces = value;
                     server = null;
@@ -163,6 +200,10 @@ namespace ZIMap
         public string MailboxName
         {   get {   return mailboxName; }
         }
+
+        public ZIMapServer.Namespace MailboxNamespace
+        {   get {   return mailboxNamespace; }
+        }
         
         public bool MailboxIsReadonly
         {   get {    return mailboxReadonly; }
@@ -175,7 +216,7 @@ namespace ZIMap
 
         public ZIMapServer Server
         {   get {   if(server == null) 
-                        server = ZIMapServer.Create(factory, EnableNamespaces);   
+                        server = ZIMapServer.CreateInstance(factory, EnableNamespaces);   
                     return server; 
                 }
             set {   if(value == null) MonitorError("Cannot assign null");
@@ -297,7 +338,7 @@ namespace ZIMap
             
             // step4: get Namespace info
             if(enableNamespaces)
-            {   if(Server.NamespaceData(ZIMapServer.Personal).Valid)
+            {   if(Server.NamespaceDataPersonal.Valid)
                     MonitorInfo("Connect: NAMESPACE enabled");
                 else
                 {   MonitorInfo("Connect: NAMESPACE disabled (not supported)");
@@ -331,16 +372,64 @@ namespace ZIMap
         // Get MailBox list
         // =====================================================================
 
+        /// <summary>
+        /// Structure that describes a MailBox (or Folder). Returned from
+        /// <see cref="Mailboxes"/>. 
+        /// </summary>
+        /// <remarks>
+        /// This structure originally reflects data received from the server.
+        /// Updates of this local information will not automatically affect the state
+        /// on the server. 
+        /// </remarks>
         public struct  MailBox
-        {   public string   Name;
+        {   /// <summary>The mailbox name as reported by the server.</summary>
+            public string   Name;
+            /// <summary>An array of mailbox attributes.</summary>
             public string[] Attributes;
+            /// <summary>An array of mailbox flags.</summary>
             public string[] Flags;
-            public char     Delimiter;   
-            public bool     Subscribed;            
+            /// <summary>Number of messages in the mailbox.</summary>
             public uint     Messages;
+            /// <summary>Number of recent messages in the mailbox.</summary>
             public uint     Recent;
+            /// <summary>Number of unseen messages in the mailbox.</summary>
             public uint     Unseen;
+            /// <summary>Can be used by an application to store private data.</summary>
             public object   UserData;
+            private uint    data;     
+            
+            /// <summary>Returns (or sets) the hierarchy delimiter information for this mailbox.</summary>
+            public char Delimiter
+            {   get {   return (char)data;  }
+                set {   data = (data & 0xffff0000) + value; }
+            }
+
+            /// <summary>Get or set the Subscribed state information.</summary>
+            public bool Subscribed
+            {   get {   return (data & 0x10000) != 0;  }
+                set {   data = (uint)(value ? (data|0x10000) : (data&~0x10000));  }  
+            }
+            /// <summary>Get or set the ReadOnly state information.</summary>
+            public bool ReadOnly
+            {   get {   return (data & 0x20000) != 0;  }
+                set {   data = (uint)(value ? (data|0x20000) : (data&~0x20000));  }  
+            }
+            /// <summary>Get or set a flag that indicates the presence of Detailed
+            /// information (Subscribed state and Message counts).</summary>
+            public bool Detailed
+            {   get {   return (data & 0x40000) != 0;  }
+                set {   data = (uint)(value ? (data|0x40000) : (data&~0x40000));  }  
+            }
+            /*
+            public bool HasSubscription
+            {   get {   return (data & 0x100000) != 0;  }
+                set {   data = (uint)(value ? (data|0x100000) : (data&~0x100000));  }  
+            }
+            public bool HasDetails
+            {   get {   return (data & 0x400000) != 0;  }
+                set {   data = (uint)(value ? (data|0x400000) : (data&~0x400000));  }  
+            }
+            */
         }
 
         /// <summary>
@@ -405,10 +494,13 @@ namespace ZIMap
                 mbox[irun].Delimiter = i.Delimiter;
                 mbox[irun].Attributes = i.Attributes;
                 mbox[irun].Subscribed = (subscribed == 2);
+                //mbox[irun].HasDetails = detailed;
+                //mbox[irun].HasSubscription = (subscribed > 0);
                 if(detailed)
                 {   ZIMapCommand.Examine cmd = new ZIMapCommand.Examine(factory);
                     cmd.UserData = irun;
                     cmd.Queue(i.Name);
+                    mbox[irun].Detailed = true;
                 }
                 irun++;
             }
@@ -585,10 +677,10 @@ namespace ZIMap
         /// It is recommended to set <see cref="EnableUidCommands"/> to <c>true</c>. 
         /// </remarks>
         public MailInfo[] MailHeaders(uint[] ids, string what) 
-        {   if(string.IsNullOrEmpty(what)) what = "UID FLAGS RFC822.SIZE BODY.PEEK[HEADER]";
-            if(ids == null || ids.Length < 1) return null;
-            if(factory == null) return null;
-
+        {   if(factory == null || ids == null) return null;
+            if(ids.Length <= 0) return new MailInfo[0];
+            if(string.IsNullOrEmpty(what)) what = "UID FLAGS RFC822.SIZE BODY.PEEK[HEADER]";
+            
             ZIMapCommand.Fetch fetch = new ZIMapCommand.Fetch(factory);
             if(fetch == null) return null;
             progress.Update(0);
@@ -739,6 +831,8 @@ namespace ZIMap
             info.Name = fullName;
             
             // save state ...
+            uint nsid = Server.FindNamespace(fullName);
+            mailboxNamespace = Server[nsid];
             mailboxName = fullName;
             mailboxReadonly = readOnly;
             mailboxTag = cmd.Tag;
@@ -748,7 +842,7 @@ namespace ZIMap
         }
         
         public bool MailboxClose(bool waitForResult)
-        {   mailboxName = null;  mailboxTag = 0;
+        {   mailboxName = null;  mailboxTag = 0;  mailboxNamespace = null;
             if(connection.TransportLayer.LastSelectTag == 0)
                 return true;
             
@@ -795,7 +889,7 @@ namespace ZIMap
             return count;
         }
         
-        public uint MailDelete(uint [] items, bool expunge)
+        public uint MailDelete(uint[] items, bool expunge)
         {   if(items == null)     return 0;
             if(items.Length <= 0) return 0;
 
@@ -825,25 +919,9 @@ namespace ZIMap
         public MailInfo[] MailSearch(string what, string charset, string search,
                                      params string [] extra)
         {   if(factory == null) return null;
-            ZIMapCommand.Search cmd = new ZIMapCommand.Search(factory);
-            if(cmd == null) return null;
-            cmd.UidCommand = enableUid;
-
-            progress.Update(0);
-            cmd.Queue(charset, search, extra);
-            progress.Update(5);
-            
-            uint [] matches = cmd.Matches;
-            if(matches == null)
-                MonitorError("MailSearch: command failed: " + cmd.Result.Message);
-            else if(matches.Length == 0)
-                MonitorInfo("MailSearch: nothing found");
-            else
-            {   MonitorInfo("MailSearch: got " + matches.Length + " matches");
-            }
-            
-            cmd.Dispose();
-            progress.Update(10);
+            progress.Push(0, 20);
+            uint [] matches = MailSearch(charset, search, extra);
+            progress.Pop();
             return this.MailHeaders(matches, what);
         }
         
@@ -876,67 +954,105 @@ namespace ZIMap
         // =====================================================================
 
         /// <summary>
+        /// A structure that holds quota information, returned by the QuotaInfo() methods. 
+        /// </summary>
+        public struct QuotaInfo
+        {   /// <summary>Name of the folder from which these quota are inherited.</summary>
+            /// <remarks>
+            /// The IMap command <c>GetQuotaRoot</c> returns an array (usually containing one
+            /// element) of quota root names. Child folders may for example return the same root
+            /// name as their parent if the have no separate quota set.  This implementation
+            /// uses only the 1st returned QuotaRoot.
+            /// </remarks>
+            public  string      QuotaRoot;
+            /// <summary>Number of kBytes used for message storage.</summary>
+            public  uint        StorageUsage;
+            /// <summary>Quota limit in kBytes for message storage.</summary>
+            public  uint        StorageLimit;
+            /// <summary>Number of messages used.</summary>
+            public  uint        MessageUsage;
+            /// <summary>Quota limit for messages.</summary>
+            public  uint        MessageLimit;
+            
+            public  bool Valid
+            {   get {   return QuotaRoot != null;   }
+            }
+        }
+        
+        /// <summary>
         /// Return quota information for a single Mailbox.
         /// </summary>
         /// <param name="mailboxFullName">
         /// Must be a full mailbox name.
         /// </param>
-        /// <param name="storageUsage">
-        /// Number of kBytes used for message storage.
-        /// </param>
-        /// <param name="storageLimit">
-        /// Quota limit in kBytes for message storage.
-        /// </param>
-        /// <param name="messageUsage">
-        /// Number of messages used.
-        /// </param>
-        /// <param name="messageLimit">
-        /// Quota limit for messages.
+        /// <param name="info">
+        /// A structure that receives the returned quota information.
         /// </param>
         /// <returns>
-        /// Returns an array (usually containing one element) of quota root names.
-        /// Child folders may for example return the same root name as their parent
-        /// if the have no separate quota set. On error <c>null</c> is returned.
+        /// <c>true</c> on success.
         /// </returns>
         /// <remarks>
         /// The quota root name is not always the same as the mailbox name, see
         /// the description of the return value.
         /// </remarks>
-        public string[] QuotaInfos(string mailboxFullName,
-                              out uint storageUsage, out uint storageLimit,
-                              out uint messageUsage, out uint messageLimit)   
-        {   messageUsage = messageLimit = storageUsage = storageLimit = 0;
-            
-            if(factory == null) return null;
-            if(string.IsNullOrEmpty(mailboxFullName))
+        public bool QuotaInfos(string mailboxFullName, out QuotaInfo info)
+        {   if(factory == null)
+                mailboxFullName = null;
+            else if(string.IsNullOrEmpty(mailboxFullName))
                 mailboxFullName = mailboxName;
-            if(mailboxFullName == null) return null;
-
-            ZIMapCommand.GetQuotaRoot gqr = new ZIMapCommand.GetQuotaRoot(factory);
-            if(gqr == null) return null;
-            gqr.Queue(mailboxFullName);
-            ZIMapCommand.GetQuotaRoot.Item[] quota = gqr.Quota;
+            if(mailboxFullName == null) 
+            {   info = new QuotaInfo();
+                return false;
+            }
             
-            if(quota == null)
-                MonitorError("QuotaInfo: command failed");
-            else if(quota.Length == 0)
-                MonitorInfo("QuotaInfo: nothing found");
-            else
-            {   MonitorInfo("QuotaInfo: got " + quota.Length + " quota");
-                foreach(ZIMapCommand.GetQuotaRoot.Item item in quota)
-                {   if(item.Resource == "MESSAGE")
-                    {   messageUsage += item.Usage;
-                        messageLimit += item.Limit;
-                    }
-                    else if(item.Resource == "STORAGE")
-                    {   storageUsage += item.Usage;
-                        storageLimit += item.Limit;
-                    }
+            ZIMapCommand.GetQuotaRoot gqr = new ZIMapCommand.GetQuotaRoot(factory);
+            if(gqr != null) gqr.Queue(mailboxFullName);
+            return QuotaInfos(gqr, out info); 
+        }
+                              
+        /// <summary>
+        /// Return quota information by executing a <c>GetQuotaRoot</c> command passed
+        /// as an argument.
+        /// </summary>
+        /// <param name="gqr">
+        /// A command for which the Query() has been called.
+        /// </param>
+        /// <param name="info">
+        /// A structure that receives the returned quota information.
+        /// </param>
+        /// <returns>
+        /// <c>true</c> on success.
+        /// </returns>
+        /// <remarks>
+        /// The quota root name is not always the same as the mailbox name, see
+        /// the description of the return value.
+        /// </remarks>
+        public bool QuotaInfos(ZIMapCommand.GetQuotaRoot gqr, out QuotaInfo info)
+        {   info = new QuotaInfo();
+            if(factory == null || gqr == null) return false;
+            
+            // check result ...
+            if(!gqr.CheckSuccess("")) return false;
+            ZIMapCommand.GetQuotaRoot.Item[] quota = gqr.Quota;
+            if(quota == null || quota.Length == 0)
+            {   MonitorInfo("QuotaInfo: nothing found");
+                return false;
+            }
+            
+            // return results ...
+            MonitorInfo("QuotaInfo: got " + quota.Length + " quota");
+            foreach(ZIMapCommand.GetQuotaRoot.Item item in quota)
+            {   if(item.Resource == "MESSAGE")
+                {   info.MessageUsage += item.Usage;
+                    info.MessageLimit += item.Limit;
+                }
+                else if(item.Resource == "STORAGE")
+                {   info.StorageUsage += item.Usage;
+                    info.StorageLimit += item.Limit;
                 }
             }
-            string[] roots = gqr.Roots;
-            gqr.Dispose();
-            return roots;
+            info.QuotaRoot = (gqr.Roots.Length > 0) ? gqr.Roots[gqr.Roots.Length-1] : ""; 
+            return true;
         }
 
         /// <summary>
@@ -968,49 +1084,108 @@ namespace ZIMap
                 mailboxFullName = mailboxName;
             if(mailboxFullName == null) return false;
 
-            ZIMapCommand.GetQuotaRoot gqr = new ZIMapCommand.GetQuotaRoot(factory);
-            if(gqr == null) return false;
-            if(!gqr.Queue(mailboxFullName))
-            {   MonitorError("QuotaLimits: command failed: " + gqr.Result.Message);
-                gqr.Dispose();
-                return false;
+            ZIMapCommand.GetQuotaRoot gqr;
+            string root;
+            using(gqr = new ZIMapCommand.GetQuotaRoot(factory))
+            {   gqr.Queue(mailboxFullName);
+                if(!gqr.CheckSuccess("QuotaLimits failed: {1}")) return false;
+                root = gqr.Roots[0];
             }
-            string root = gqr.Roots[0];
 
             if(!Server.HasLimit("storage")) storageLimit = 0;            
             if(!Server.HasLimit("message")) messageLimit = 0;            
             
-            ZIMapCommand.SetQuota cmd = new ZIMapCommand.SetQuota(factory);
-            StringBuilder sb = new StringBuilder();
-            if(messageLimit > 0) sb.Append("MESSAGE " + messageLimit);
-            if(storageLimit > 0)
-            {   if(sb.Length > 0) sb.Append(' ');
-                sb.Append("STORAGE " + storageLimit);
+            ZIMapCommand.SetQuota cmd;
+            using(cmd = new ZIMapCommand.SetQuota(factory))
+            {   StringBuilder sb = new StringBuilder();
+                if(messageLimit > 0) sb.Append("MESSAGE " + messageLimit);
+                if(storageLimit > 0)
+                {   if(sb.Length > 0) sb.Append(' ');
+                    sb.Append("STORAGE " + storageLimit);
+                }
+                cmd.Queue(root, sb.ToString());
+                return cmd.CheckSuccess("QuotaLimits failed: {1}");
             }
-            cmd.Queue(root, sb.ToString());
-            bool bok = cmd.Result.Succeeded;
-            if(!bok) MonitorError("QuotaLimits: command failed: " + cmd.Result.Message);
-            cmd.Dispose();
-            return bok;
         }
                 
         // =====================================================================
         // Import/Export 
         // =====================================================================
 
-        public ZIMapExport OpenExport(string path, bool allowFile, bool preferVersions)
+        /// <summary>
+        /// Open an export file or folder for writing.
+        /// </summary>
+        /// <param name="path">
+        /// A path or filename depending on <paramref name="allowFile"/>
+        /// </param>
+        /// <param name="allowFile">
+        /// When <c>false</c> the <paramref name="path"/> argument must specify a folder.
+        /// </param>
+        /// <param name="preferVersions">
+        /// If <c>true</c> the files will be versioned, if <c>false</c> all existing
+        /// versions of a file will be removed before a new file is created.
+        /// </param>
+        /// <returns>
+        /// On success <c>true</c> is returned.
+        /// </returns>
+        /// <remarks>
+        /// This routine checks for the existence of a folder or a file and eventually
+        /// creates it, but no file will be opened for reading or writing.  Success
+        /// does not mean that you have the neccessary rights to read or write data.
+        /// <para/>
+        /// This routine configures the use of the personal namespace delimiter (returned by 
+        /// <see cref="ZIMapServer.DefaultDelimiter"/>).
+        /// </remarks>
+        public bool ExportWrite(string path, bool allowFile, bool preferVersions)
         {   ZIMapExport expo = Export;
             expo.Versioning = true;
-            exportSerial = expo.Open(path, Server.DefaultDelimiter, allowFile, true, true);
-            if(exportSerial == 0) return null;              // open failed
-            return expo;
+            exportSerial = expo.Open(path, Server.DefaultDelimiter, allowFile, true);
+            if(exportSerial == 0) return false;             // open failed
+            exportWrite = true;
+            return true;
         }
         
-        public ZIMapExport OpenImport(string path, bool allowFile)
+        /// <summary>
+        /// Open an export file or folder for reading.
+        /// </summary>
+        /// <param name="path">
+        /// A path or filename depending on <paramref name="allowFile"/>
+        /// </param>
+        /// <param name="allowFile">
+        /// When <c>false</c> the <paramref name="path"/> argument must specify a folder.
+        /// </param>
+        /// <returns>
+        /// On success <c>true</c> is returned.
+        /// </returns>
+        /// <remarks>
+        /// This routine checks for the existence of a folder or a file, but no file will be
+        /// opened for reading.  Success does not mean that you have the neccessary rights
+        /// to read data.
+        /// <para/>
+        /// This routine configures the use of the personal namespace delimiter (returned by 
+        /// <see cref="ZIMapServer.DefaultDelimiter"/>).
+        /// </remarks>
+        public bool ExportRead(string path, bool allowFile)
         {   ZIMapExport expo = Export;
-            exportSerial = expo.Open(path, Server.DefaultDelimiter, allowFile, false, false);
-            if(exportSerial == 0) return null;              // open failed
-            return expo;
+            exportSerial = expo.Open(path, Server.DefaultDelimiter, allowFile, false);
+            if(exportSerial == 0) return false;             // open failed
+            exportWrite = false;
+            return true;
+        }
+        
+        public bool ExportMailbox(string fullName, uint nsIndex)
+        {   if(string.IsNullOrEmpty(fullName)) return false;
+            if(export == null || exportSerial == 0 || exportSerial != export.Serial)
+            {   MonitorError("ExportMailbox: No open export file or folder");
+                return false;
+            }
+            // get nsIndex and friendly name ...
+            if(exportWrite && nsIndex == ZIMapServer.Nothing)
+                    fullName = Server.FriendlyName(fullName, out nsIndex);
+            export.Delimiter = Server[nsIndex].Delimiter;
+
+            return exportWrite ? export.WriteMailbox(fullName)
+                               : export.ReadMailbox(fullName);
         }
     }
 }

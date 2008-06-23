@@ -574,12 +574,20 @@ namespace ZIMap
         {
             public Search(ZIMapFactory parent) : base(parent, "SEARCH") {}
 
-            private uint[] matches;            
+            private uint[] matches;
+            
+            /// <summary>Returns the number of mail items that where matched.</summary>
+            public uint   MatchCount
+            {   get {   if(!Parse()) return 0;
+                        return (uint)matches.Length;
+                    }
+            }
             
             public uint[] Matches
             {   get {   Parse(); return matches; }
             }
             
+            /// <summary>Returns and array of IDs or UIDs of matched mail items.</summary>
             protected override bool Parse(bool reset)
             {
                 if(reset)
@@ -703,6 +711,12 @@ namespace ZIMap
             }
         }
 
+        /// <summary>
+        /// A class that handles the SELECT IMap command.
+        /// </summary>
+        /// <remarks>
+        /// The class overloads the Query() method.
+        /// </remarks>
         public class Select : MailboxBase
         {
             public Select(ZIMapFactory parent) : base(parent, "SELECT") {}
@@ -1341,26 +1355,23 @@ namespace ZIMap
                     }
                     if(info.Status != "QUOTA") continue;    // not for us...
                     
-                    for(int irun=1; irun < parser.Length; irun++)
-                    {   ZIMapParser.Token token = parser[irun];
-                        if(token.Type != ZIMapParser.TokenType.List)
-                        {   MonitorError("Strange data: " + info);
-                            break;
-                        }
-                        ZIMapParser.Token[] triplet = token.List;
-                        if(triplet.Length == 0) continue;
-                        if(triplet.Length != 3 ||
-                           triplet[1].Type != ZIMapParser.TokenType.Number ||
-                           triplet[2].Type != ZIMapParser.TokenType.Number) 
+                    if(parser.Length < 2 ||
+                       parser[1].Type != ZIMapParser.TokenType.List)
+                        continue;                           // ignore this
+                    ZIMapParser.Token[] triplet = parser[1].List;
+                    for(int irun=0; irun < triplet.Length; irun += 3)
+                    {   if(triplet.Length - irun < 3 ||
+                           triplet[irun+1].Type != ZIMapParser.TokenType.Number ||
+                           triplet[irun+2].Type != ZIMapParser.TokenType.Number) 
                         {   MonitorError("Invalid data: " + info);
                             break;
                         }
                         
                         Item item = new Item();
                         item.RootName = parser[0].Text;
-                        item.Resource = triplet[0].Text;
-                        item.Usage = triplet[1].Number;
-                        item.Limit = triplet[2].Number;
+                        item.Resource = triplet[irun].Text;
+                        item.Usage = triplet[irun+1].Number;
+                        item.Limit = triplet[irun+2].Number;
                         list.Add(item);
                     }
                 }
