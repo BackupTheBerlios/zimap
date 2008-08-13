@@ -85,8 +85,8 @@ namespace ZIMapTools
             {   base.UpdateUsers(new MBoxRef(users), others);                
             }
 
-            public new void UpdateHeaders(ZIMapApplication.MailInfo[] headers)
-            {   base.UpdateHeaders(headers);
+            public void UpdateHeaders(ZIMapApplication.MailInfo[] headers)
+            {   base.UpdateHeaders(new MailRef(headers, parent.application.MailboxName));
             }
 
             public override string Qualifier
@@ -249,14 +249,14 @@ namespace ZIMapTools
             return true;
         }
         
-        public bool HeadersSort(ZIMapApplication.MailInfo[] headers, string field, bool reverse)
-        {   if(headers == null) return false;
-            uint ulen = (uint)headers.Length;
+        public bool HeadersSort(MailRef headers, string field, bool reverse)
+        {   if(headers.IsNothing) return false;
+            uint ulen = headers.Count;
             if(ulen == 0) return true;
             
             // no sort, do reverse?
             if(string.IsNullOrEmpty(field))
-            {   if(reverse) Array.Reverse(headers);
+            {   if(reverse) Array.Reverse(headers.Array(0));
                 return true;
             }
             
@@ -293,8 +293,8 @@ namespace ZIMapTools
                     case "date":    keys[urun] = mail.DateBinary; break;
                  }                
             }
-            Array.Sort(keys, headers);
-            if(reverse) Array.Reverse(headers);
+            Array.Sort(keys, headers.Array);
+            if(reverse) Array.Reverse(headers.Array);
             return true;
         }
 
@@ -355,7 +355,7 @@ namespace ZIMapTools
                                                 server.NamespaceDataShared;
             //if(!ns.Valid) return false;
 
-            // TODO: LoadUsers nonsense: users.theuser.something (not found)
+            // The "%" filter returns users even if they have in root mailbox!
             ZIMapApplication.MailBox[] users = application.Mailboxes(ns.Prefix, "%", 0, false);
             if(users == null) return false;
 
@@ -404,8 +404,7 @@ namespace ZIMapTools
 
             if(bCreate || bDelete)
             {   if(bDelete)
-                {   ZIMapCommand.SetACL acl = new ZIMapCommand.SetACL(factory);
-                    acl.Queue(user, factory.User, "lca");
+                {   MailboxAdminRigths(user, null, "all", false);
                     progress.Update(60);
                 }
                 ZIMapCommand.MailboxBase cmd = 
@@ -474,8 +473,8 @@ namespace ZIMapTools
         {   if(!mbox.IsValid) return false;
             
             // we want to use the current mailbox ...
-            if(mbox.Name == data.Current.Name)
-            {   if(!readOnly && data.Current.ReadOnly)
+            if(mbox.Name == application.MailboxName)
+            {   if(!readOnly && application.MailboxIsReadonly)
                 {   if(!ZIMapAdmin.Confirm("Current mailbox '{0}' is readonly. Change mode", 
                                            mbox.Name)) return false;
                     MonitorInfo("Setting write mode for current mailbox");
@@ -521,6 +520,22 @@ namespace ZIMapTools
         }
 
         /// <summary>
+        /// An admin can SetACL to get the required rights for an object 
+        /// </summary>
+        public bool MailboxAdminRigths(string mbox, string curr, string want, bool wait)
+        {   if(!server.IsAdmin) return true;            // not an administrator
+            want = server.RightsCheck(want, curr);
+            if(want == null) return true;
+            MonitorInfo("Change rigths from '{0}' to '{1}': {2}", curr, want, mbox);
+            ZIMapCommand.SetACL cmd = new ZIMap.ZIMapCommand.SetACL(factory);
+            if(cmd == null) return false;
+            cmd.Queue(mbox, application.User, want);
+            if(!wait && cmd.AutoDispose) return true;   // no wait, autodisposing 
+            bool bok = cmd.CheckSuccess(); cmd.Dispose();
+            return bok;
+        }
+        
+        /// <summary>
         /// Delete a mailbox from the server and update the cached information.
         /// </summary>
         /// <param name="mbox">
@@ -536,8 +551,7 @@ namespace ZIMapTools
                 if(mbox.Name == data.Current.Name) MailboxClose();
 
                 // TODO: MailboxDelete must update QuotaRoot                
-
-                if(server.IsAdmin) CommandACL(mbox, false, null, "lrca");
+                MailboxAdminRigths(mbox.Name, mbox.ExtraRights, "all", false);
                 cmd.Queue(mbox.Name);
                 if(!cmd.CheckSuccess(string.Format(
                        ":Failed to delete '{0}': {1}",

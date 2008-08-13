@@ -579,7 +579,7 @@ namespace ZIMap
         public string FormalName(string mailbox)
         {   string pref = factory.User;
             if(string.IsNullOrEmpty(pref)) return mailbox;  // don't know my account
-            if(mailbox == "~" || mailbox == pref)
+            if(/*mailbox == "~" ||*/ mailbox == pref)
                 return "INBOX";
             pref += DefaultDelimiter;
             if(mailbox.StartsWith(pref))
@@ -605,6 +605,85 @@ namespace ZIMap
             if(namespdata[nsIndex] == null) NamespaceData(nsIndex);
             char deli = namespdata[nsIndex].Delimiter;
             return name.IndexOf(deli, startIndex);
+        }
+
+        /// <summary>
+        /// Get a selection of rights (in IMap ACL format) from a descriptive name.
+        /// </summary>
+        /// <param name="name">
+        /// Is a descriptive name (not a set of rights)
+        /// </param>
+        /// <returns>
+        /// A set of rights that can be used for IMap's <c>SetACL</c> command.
+        /// </returns>
+        /// <remarks>
+        /// The accepted names for rights are listed below. All other values cause and exception
+        /// to be raised:
+        /// <para />
+        /// <list type="table"><listheader>
+        ///   <term>Name</term>
+        ///   <description>Result (for cyrus) and description</description>
+        /// </listheader><item>
+        ///   <term>none</term>
+        ///   <description>"" no rights, the server will add some required minimum rights automatically</description>
+        /// </item><item>
+        ///   <term>read</term>
+        ///   <description>"lrs" read access</description>
+        /// </item><item>
+        ///   <term>append</term>
+        ///   <description>"lrsip" allow append and copy</description>
+        /// </item><item>
+        ///   <term>write</term>
+        ///   <description>"lrswipcd" allows full write access</description>
+        /// </item><item>
+        ///   <term>all</term>
+        ///   <description>"lrswipcda" add administrative right to 'write'</description>
+        /// </item></list>
+        /// </remarks>
+        public virtual string RightsByName(string name)
+        {   switch(name)
+            {   case "none":    return "";
+                case "read":    return "lrs";
+                case "append":  return "lrsip";
+                case "write":   return "lrswipcd";
+                case "all":     return "lrswipcda";
+            }
+            RaiseError(ZIMapException.Error.InvalidArgument, name);
+            return null;
+        }
+
+        /// <summary>
+        /// Uses a descriptive name for a set of rights and return an IMap ACL string
+        /// that can be used to obtain additional rights.
+        /// </summary>
+        /// <param name="request">
+        /// A descriptive name like <c>append</c> for the requested rights, see
+        /// <see cref="RightsByName"/>.
+        /// </param>
+        /// <param name="currentRights">
+        /// The current rights in IMap ACL format (can be <c>null</c> or empty).
+        /// </param>
+        /// <returns>
+        /// If the requested rights are not contained in the current rights the method
+        /// returns a non-empty string that can be used for <c>SetACL</c>.  When sufficient
+        /// rights are availlable <c>null</c> is returned.  The result is always a union
+        /// of requested and current rights and can therefore not be empty.
+        /// </returns>
+        /// <remarks>
+        /// This method can be used by a caller who wants to upgrade the current rights
+        /// to a requested level.  The result is either <c>null</c> if the current rigths
+        /// are sufficient or a string that can be used with <c>SetACL/c> to obtain the
+        /// requested rights.  The method calls <see cref="RightsByName"/> and may throw
+        /// an exception for invalid values of <paramref name="request"/>. 
+        /// </remarks>
+        public string RightsCheck(string request, string currentRights)
+        {   string want = RightsByName(request);
+            if(want == null || string.IsNullOrEmpty(currentRights)) return want;
+            StringBuilder sb = new StringBuilder(currentRights);
+            foreach(char cwant in want)
+                if(currentRights.IndexOf(cwant) < 0) sb.Append(cwant);
+            want = sb.ToString();
+            return (want == currentRights) ? null : want;
         }
     }
 }

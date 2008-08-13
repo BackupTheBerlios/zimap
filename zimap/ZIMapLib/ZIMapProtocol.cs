@@ -566,6 +566,7 @@ namespace ZIMap
         public bool Receive(out ReceiveData data)
         {   data = new ReceiveData();
             data.State = Receive(ref data, out data.Literals);
+            bool exists = false;                    // flag to invoke Messages() callback
             
             // fetch all info data and all literals ...
             if(data.State == ReceiveState.Info)
@@ -600,13 +601,19 @@ namespace ZIMap
                     // check for "* nn EXISTS" messages ...
                     if(exists_cnt != uint.MaxValue && message == "EXISTS")
                     {   uint ecnt = 0;
-                        if(uint.TryParse(infos[irun*2], out ecnt)) exists_cnt = ecnt;
+                        if(uint.TryParse(infos[irun*2], out ecnt)) 
+                        {   exists_cnt = ecnt;  exists = true;
+                        }
                     }
                 }
                 if(multi != null)
                     data.Literals = multi.ToArray();
             }
 
+            // EXISTS count callback
+            if(exists)
+                MonitorInvoke(ZIMapConnection.Monitor.Messages, exists_cnt.ToString());
+            
             // check for errors
             switch(data.State)
             {   case ReceiveState.Info:

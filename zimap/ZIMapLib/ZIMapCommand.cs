@@ -19,8 +19,8 @@ namespace ZIMap
     //==========================================================================
 
     /// <summary>
-    /// Helper to issue IMAP commands and to collect the server responses
-    /// belonging to it.
+    /// Class to issue IMAP commands and to collect the server responses
+    /// belonging to it (Command Layer).
     /// </summary>
     /// <remarks>
     /// This class is public but abstract. You may for example use 
@@ -37,6 +37,10 @@ namespace ZIMap
         /// <summary>
         /// Processing status of a  <see cref="ZIMapCommand"/> object.
         /// </summary>
+        /// <remarks>
+        /// A value of this type gets returned by the property 
+        /// <see cref="ZIMapCommand.State"/>
+        /// </remarks>
         public enum CommandState
         {   /// <summary>Command was just created or did a Reset().</summary>
             Created,
@@ -68,9 +72,14 @@ namespace ZIMap
         /// </summary>
         /// <remarks>
         /// The RFC3501 "UID" Command is essentially a prefix for some IMap commands. This
-        /// is implemented by the <see cref="ZIMapCommand.UidCommand" /> property. That
-        /// property can be set <c>true</c> for the commands named in this array.
-        /// </remarks>
+        /// is implemented by setting the <see cref="ZIMapCommand.UidCommand" /> property.  
+        /// That property can be set <c>true</c> only for the commands named in this array:
+        /// <para/><list type="bullet">
+        ///  <item><term>COPY - <see cref="ZIMapCommand.Copy" /></term></item>
+        ///  <item><term>FETCH - <see cref="ZIMapCommand.Fetch" /></term></item>
+        ///  <item><term>STORE - <see cref="ZIMapCommand.Store" /></term></item>
+        ///  <item><term>SEARCH - <see cref="ZIMapCommand.Search" /></term></item>
+        ///</list></remarks>
         public static readonly string[] UidCommands = { "COPY", "FETCH", "STORE", "SEARCH" };        
         
         // --- Request arguments ---
@@ -112,18 +121,23 @@ namespace ZIMap
         // Accessors for properties
         // =====================================================================
 
+        /// <summary>
+        /// Controls if this instance will be automatically disposed. See
+        /// <see cref="ZIMapFactory.DisposeCommands"/> for details.
+        /// </summary>
         public bool AutoDispose
         {   get {   return autoDispose; }
             set {   autoDispose = value; }
         }
         
+        /// <summary>Can be used to get the current state of the command</summary>
         public CommandState State 
         {   get {   return state; }
         }
         
-        /// <value>
+        /// <summary>
         /// This property returns the raw results of the command.
-        /// </value>
+        /// </summary>
         /// <remarks>
         /// A call to this property will implicitly execute the command and
         /// wait for the results.  In other words: it can be blocking.  After
@@ -142,17 +156,20 @@ namespace ZIMap
                 }
         }
         
-        /// <value>Return the IMap command name.</value>
+        /// <summary>Returns the IMap command name.</summary>
         public string Command 
         {   get {   return command; }
         }
 
-        /// <value>Returns <c>true</c> if some of the command arguments are literals.</value>
+        /// <summary>Returns <c>true</c> if some of the command arguments are literals.</summary>
+        /// <remarks>The <see cref="ZIMapProtocol.Send(string)"/> method uses this property
+        /// and automatically processes all server responses for running commands before
+        /// it attempts to send a literal.</remarks>
         public bool HasLiterals 
         {   get {   return literals != null; }
         }
 
-        /// <value>Returns <c>true</c> if the command has completed.</value>
+        /// <summary>Returns <c>true</c> if the command has completed.</summary>
         /// <remarks>
         /// A command is completed after a response was received from the server (or if
         /// the command was aborted because it could not be sent).  A call to this 
@@ -163,7 +180,7 @@ namespace ZIMap
                             state == CommandState.Failed); }
         }
         
-        /// <value>Returns <c>true</c> if the command is queued but not yet completed.</value>
+        /// <summary>Returns <c>true</c> if the command is queued but not yet completed.</summary>
         /// <remarks>
         /// A command is completed after a response was received from the server (or if
         /// the command was aborted because it could not be sent).  A call to this 
@@ -174,10 +191,18 @@ namespace ZIMap
                             state == CommandState.Running); }
         }
         
+        /// <summary>Returns the IMap tag to was assigned by <see cref="ZIMapProtocol.Send(string)"/>
+        /// to this command.</summary>
         public uint Tag {
             get {   return tag; }
         }
 
+        /// <summary>
+        /// When enabled some commands will be sent with a <c>UID</c> prefix.
+        /// </summary>
+        /// <remarks>Not all commands can user the <c>UID</c> prefix, an exception
+        /// is thrown on an attempt to set this property for the wron command. See
+        /// <see cref="UidCommands"/> for details.</remarks>
         public bool UidCommand
         {   get {   return  uidCommand; }
             set {   if(value == false)
@@ -745,7 +770,8 @@ namespace ZIMap
         }
 
         /// <summary>
-        /// Return an 'untagged response' parser for Data.Status == CommandName. 
+        /// Returns a parser for 'untagged response' data with the filter
+        /// <c>Result.Status == Command</c>. 
         /// </summary>
         /// <returns>
         /// A parser on succes or <c>null</c> on error.
@@ -753,13 +779,33 @@ namespace ZIMap
         /// <remarks>
         /// This routine will work for most simple IMap commands. If it returns <c>null</c>
         /// either the command failed with an error status or the server did not return
-        /// an 'untagged response' with the expected Data.Status.
+        /// an 'untagged response' that matches the filter condition.
+        /// <para />
+        /// This method simply forwards the call to <see cref="InfoParser(string, ref uint)"/>
+        /// with an empty filter string and only uses the 1st 'untagged response'.
         /// </remarks>
         public ZIMapParser InfoParser()
         {   uint index = 0;
             return InfoParser("", ref index);
         }
 
+        /// <summary>
+        /// Returns a parser for 'untagged response' data with a given filter and a given index.
+        /// </summary>
+        /// <param name="filter">
+        /// A filter for the command status or <c>null</c> to match all. An empty string matches
+        /// the command name.
+        /// </param>
+        /// <param name="index">
+        /// On call this is the start index, on return the value is set to the succeeding entry. 
+        /// </param>
+        /// <returns>Returns <c>null</c> if either the command failed with an error status or the
+        /// server did not return an 'untagged response' that matches the filter condition.      
+        /// </returns>
+        /// <remarks>
+        /// Unsually IMap command return the command name as status, but <c>OK</c> or a number
+        /// are also common.
+        /// </remarks>
         public ZIMapParser InfoParser(string filter, ref uint index)
         {   // return null if something went wrong ...
             ZIMapProtocol.ReceiveInfo[] infos;
@@ -845,9 +891,15 @@ namespace ZIMap
         {
             private bool    parsed;         // set by Parse()
             
-            // base has no def xtor ...
+            /// <summary>Construct an instance of a generic command</summary>
+            /// <param name="parent">The owning factory (must not be <c>null</c>).</param>
+            /// <param name="command">The IMap command name (<c>null</c> 
+            /// will generate a NOOP command).</param>
+            /// <remarks>It is not very common to use this class directly.</remarks>
             public Generic(ZIMapFactory parent, string command) : base(parent)
-            {   base.command = (command == null) ? "NOOP" : command.ToUpper();
+            {   if(parent == null) ZIMapException.Throw(null,
+                     ZIMapException.Error.MustBeNonZero, "ZIMapCommand xtor");
+                base.command = (command == null) ? "NOOP" : command.ToUpper();
             }
            
             // must implement, abstract in base ...
@@ -857,10 +909,16 @@ namespace ZIMap
             }
 
             /// <summary>
-            /// Free resources and detach the command from it's factory
+            /// Free resources and detach the command (and eventually its ancestors)
+            /// from the owning factory.
             /// </summary>
             /// <remarks>
-            /// This method is similar to <see cref="Reset"/> but the later does
+            /// When the factory has set the <see cref="ZIMapFactory.EnableAutoDispose"/>
+            /// property, this method calls <see cref="ZIMapFactory.DisposeCommands"/>
+            /// to automatically dispose commands with a lower Tag number (e.g. that are
+            /// older than the caller).
+            /// <para />
+            /// The effect ot this method is similar to <see cref="Reset"/> but the later does
             /// not cancel a queued command nor detach it from it's factory.
             /// </remarks>
             public override void Dispose()

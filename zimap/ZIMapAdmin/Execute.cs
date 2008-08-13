@@ -70,7 +70,10 @@ namespace ZIMapTools
         public static bool ExecuteDelete(string[] opts, string[] args)
         {   bool bRecurse = HasOption(opts, "recurse");
 
-            if(!Cache.Data.Load(CacheData.Info.Details))    // want message counts
+            CacheData.Info info = CacheData.Info.Details;   // want message counts
+            if(App.Server.IsAdmin)                          // admin can modify ACL 
+                info |= CacheData.Info.Rights;
+            if(!Cache.Data.Load(info))                      // get mbox data
                 return false;
             if(!Cache.CheckMailboxArgs(ref args, true))     // all args must exist
                 return false;
@@ -380,7 +383,7 @@ namespace ZIMapTools
                 return false;
             }
 
-            if(Cache.Data.Headers == null)                  // headers not cached
+            if(Cache.Data.Headers.IsNothing)            // headers not cached
             {   ProgressReporting.Update(0);
                 ProgressReporting.Push(0, 66);
                 if(!Cache.Data.Load(CacheData.Info.Headers)) return false;
@@ -663,9 +666,9 @@ namespace ZIMapTools
             }
 
             string rights = "";
-            if(bAll)        rights = "lrswipcda";
-            else if(bRead)  rights = "lrs";
-            else if(bWrite) rights = "lrswipcd";
+            if(bAll)        rights = App.Server.RightsByName("all");
+            else if(bRead)  rights = App.Server.RightsByName("read");
+            else if(bWrite) rights = App.Server.RightsByName("write");
             else if(bCust)  rights = args[1];
             if(bDeny) rights = "-" + rights;
             if(bNone) rights = null;
@@ -676,7 +679,8 @@ namespace ZIMapTools
             do  {   if(irun < args.Length) user = args[irun];
                     if(!Cache.CommandACL(Cache[mailbox], bTree, user, rights)) bok = false;
                 } while(++irun < args.Length);
-            Cache.Data.Clear(CacheData.Info.Rights);
+            // after changing rights details may change visibility
+            Cache.Data.Clear(CacheData.Info.Rights | CacheData.Info.Details);
             return bok;
         }
 
@@ -800,7 +804,8 @@ namespace ZIMapTools
             Info("Query has {0} arguments: {1}", extra == null ? 0 : extra.Length, search);
             ZIMapApplication.MailInfo[] mails = App.MailSearch(null, "", search, extra);
             if(mails == null) return false;
-            ListMails(mails, true, true, true, false, false, false, false, false);
+            ListMails(new CacheData.MailRef(mails, "-"),
+                      true, true, true, false, false, false, false, false);
             return true;
         }
 

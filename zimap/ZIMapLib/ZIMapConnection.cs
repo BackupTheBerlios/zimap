@@ -83,6 +83,9 @@ namespace ZIMap
         /// </summary>
         protected ZIMapConnection() : base(null) {}        
         
+        /// <summary>
+        /// Get numeric protocol port for "imap", see <see cref="GetIMapPort(string)"/>.
+        /// </summary>
         public static uint GetIMapPort()
         {   return GetIMapPort("imap");
         }
@@ -96,6 +99,11 @@ namespace ZIMap
         /// <returns>
         /// <c>0</c> on error or a port number.
         /// </returns>
+        /// <remarks>
+        /// Due to .NET implementation limits this method does not examine any
+        /// '/etc/services' file rather than returning built-in constants for
+        /// "imap" (143) and "imaps" (993).
+        /// </remarks>
         public static uint GetIMapPort(string protocolName)
         {   // name given?
             switch(protocolName)
@@ -112,11 +120,51 @@ namespace ZIMap
             ZIMapException.Throw(null, ZIMapException.Error.UnknownProtocol, protocolName);
             return 0;                                  
         }
-            
+
+        /// <summary>
+        /// Creates a connection instance and opens an IMap connection.
+        /// </summary>
+        /// <param name="server">
+        /// The server URL or IP Address.
+        /// </param>
+        /// <returns>
+        /// A new instance of <c>ZIMapConnection</c> that is connected to the
+        /// specified IMap server.
+        /// </returns>
+        /// <remarks>
+        /// This method uses <see cref="TlsModeEnum.Automatic"/> and a connection
+        /// timeout of 30s.
+        /// <para />
+        /// The method raises an error of type <see cref="ZIMapException.Error.CannotConnect"/>
+        /// if no connection can be established.
+        /// </remarks>
         public static ZIMapConnection GetConnection(string server)
         {   return GetConnection(server, GetIMapPort(), TlsModeEnum.Automatic, 30);
         }
 
+        /// <summary>
+        /// Creates a connection instance and opens an IMap connection.
+        /// </summary>
+        /// <param name="server">
+        /// The server URL or IP Address.
+        /// </param>
+        /// <param name="port">
+        /// The port number to be used, see <see cref="GetIMapPort(string)"/>.
+        /// </param>
+        /// <param name="tlsMode">
+        /// Controls TLS (tranport layer security), see <see cref="TlsModeEnum"/>.
+        /// </param>
+        /// <param name="timeout">
+        /// Connection timeout, use <c>0</c> for no timeout.
+        /// </param>
+        /// <returns>
+        /// A new instance of <c>ZIMapConnection</c> that is connected to the
+        /// specified IMap server.
+        /// </returns>
+        /// <remarks>
+        /// The method raises an error of type <see cref="ZIMapException.Error.CannotConnect"/>
+        /// if no connection can be established.
+        /// </remarks>
         public static ZIMapConnection GetConnection(string server, uint port, 
                                                     TlsModeEnum tlsMode, uint timeout)
         {   ZIMapConnection conn = new ZIMapConnection();
@@ -156,7 +204,20 @@ namespace ZIMap
             conn.protocol = new Protocol(conn, conn.transport);
             return conn;
         }
-        
+
+        /// <summary>
+        /// Close the connection and dispose the command layer.
+        /// </summary>
+        /// <returns>
+        /// On success <c>true</c> is returned.
+        /// </returns>
+        /// <remarks>
+        /// After closing the connection and if a factory (command layer) is in use
+        /// <see cref="ZIMapFactory.Dispose"/> will be called.
+        /// <para />
+        /// The method raises an error of type <see cref="ZIMapException.Error.CloseFailed"/>
+        /// if no connection can be established.
+        /// </remarks>
         public bool Close()
         {   
             if (stream == null)
@@ -329,7 +390,8 @@ namespace ZIMap
         // Get a TLS stream ...
         private Stream GetTlsStream()
         {
-#if MONX_BUILD               
+            // An outdated (?) mono only SSL class...
+#if MONO_BUILD               
             Mono.Security.Protocol.Tls.SslClientStream sssl =
                  new Mono.Security.Protocol.Tls.SslClientStream(stream, server, true);
             if(sssl != null)
@@ -343,7 +405,8 @@ namespace ZIMap
                 sssl.Write(data, 0, 0);
                 return sssl;
             }
-#elif MONO_BUILD || MS_BUILD
+            // Works for Windows and mono (partially)...
+#else
             System.Net.Security.SslStream sssl = new System.Net.Security.SslStream(stream, true, //false,
                 new System.Net.Security.RemoteCertificateValidationCallback(ValCert));
             if(sssl != null)
@@ -356,7 +419,7 @@ namespace ZIMap
         }
 
         // Validate the server certificate ...
-#if MONX_BUILD
+#if MONO_BUILD
         // Callback for SslClientStream to ignore server certificate errors
         private bool ValCert(System.Security.Cryptography.X509Certificates.X509Certificate certificate,
                              int[] certificateErrors)
@@ -368,7 +431,7 @@ namespace ZIMap
             MonitorError("Server certificate is invalid. Error ignored!"); 
             return true;
         }
-#elif MONO_BUILD || MS_BUILD
+#else
         private bool ValCert(object sender,
             System.Security.Cryptography.X509Certificates.X509Certificate certificate,
             System.Security.Cryptography.X509Certificates.X509Chain chain, 
@@ -457,11 +520,11 @@ namespace ZIMap
         
         /// <summary>
         /// Return the <see cref="ZIMapFactory"/> object that was created by
-        /// a call to <see cref="CommandLayer"/>.
+        /// the 1st call to <see cref="CommandLayer"/>.
         /// </summary>
         /// <returns>
-        /// Returns <c>null</c> if <see cref="CommandLayer"/> was never used to
-        /// reate a factory.
+        /// Returns <c>null</c> if <see cref="CommandLayer"/> was never called to
+        /// create a factory.
         /// </returns>      
         /// <remarks>
         /// This method is a convenient way to detect if an application uses
@@ -470,7 +533,6 @@ namespace ZIMap
         public ZIMapFactory GetFactoryInUse()
         {   return factory;
         }
-        
 #endregion
 
 #region Monitoring Support

@@ -80,8 +80,6 @@ namespace ZIMap
         private bool            enableQuota = true;
         private bool            enableUid = true;
 
-        private bool            enableMessages;
-            
         // see OpenMailbox ...
         private string          mailboxName;
         private uint            mailboxTag;
@@ -97,14 +95,28 @@ namespace ZIMap
         // Accessors
         // =====================================================================
         
+        /// <summary>
+        /// Returns a reference to the parent instance which always is the connection
+        /// object that created this factory.
+        /// </summary>
         public ZIMapConnection Connection
         {   get {   return connection;  }
         }
 
-// TODO: implement EnableMessagesReporting        
+        /// <summary>
+        /// Controls wether the protocol invokes a call back function when the server
+        /// reports new messages.
+        /// </summary>
+        /// <remarks>
+        /// This feature could be used to monitor an open mailbox for new messages.
+        /// See <see cref="ZIMapConnection.Monitor.Messages"/>
+        /// and <see cref="ZIMapProtocol.ExistsCount"/> for details.
+        /// </remarks>
         public bool EnableMessagesReporting
-        {   get {   return enableMessages;  }
-            set {   enableMessages = value; }
+        {   get {   return connection.ProtocolLayer.ExistsCount != uint.MaxValue;  }
+            set {   if(value == EnableMessagesReporting) return;   
+                    connection.ProtocolLayer.ExistsCount = value ? 0 : uint.MaxValue;
+                }
         }
 
         /// <summary>
@@ -201,6 +213,10 @@ namespace ZIMap
         {   get {   return mailboxName; }
         }
 
+        /// <summary>The Namespace of the currently open mailbox.</summary>
+        /// <returns>The return value can be <c>null</c> if no mailbox is open.</returns>
+        /// <remarks>This value is set by <see cref="MailboxOpen(string,bool)"/>
+        /// and is cleared by <see cref="MailboxClose"/>.</remarks>
         public ZIMapServer.Namespace MailboxNamespace
         {   get {   return mailboxNamespace; }
         }
@@ -285,10 +301,49 @@ namespace ZIMap
             }
         }
         
+        /// <summary>
+        /// Connect to the IMap server and optionally login.
+        /// </summary>
+        /// <param name="user">
+        /// An IMap account name or <c>null</c> for no login.
+        /// </param>
+        /// <param name="password">
+        /// The password for the given account.
+        /// </param>
+        /// <returns>
+        /// On success <c>true</c> is returned.
+        /// </returns>
+        /// <remarks>This function calls <see cref="ZIMapConnection.GetConnection(string)"/>
+        /// and uses <see cref="ZIMapCommand.Login"/> for login.
+        /// <para />
+        /// If this method is called while having an open connection <c>Disconnect</c> 
+        /// gets called first.
+        /// </remarks>
         public bool Connect(string user, string password)
         {   return Connect(user, password, ZIMapConnection.TlsModeEnum.Automatic);
         }
         
+        /// <summary>
+        /// Connect to the IMap server and optionally login.
+        /// </summary>
+        /// <param name="user">
+        /// An IMap account name or <c>null</c> for no login.
+        /// </param>
+        /// <param name="password">
+        /// The password for the given account.
+        /// </param>
+        /// <param name="tlsMode">
+        /// Controls TLS (tranport layer security).
+        /// </param>
+        /// <returns>
+        /// On success <c>true</c> is returned.
+        /// </returns>
+        /// <remarks>This function calls <see cref="ZIMapConnection.GetConnection(string)"/>
+        /// and uses <see cref="ZIMapCommand.Login"/> for login.
+        /// <para />
+        /// If this method is called while having an open connection <c>Disconnect</c> 
+        /// gets called first.
+        /// </remarks>
         public bool Connect(string user, string password, ZIMapConnection.TlsModeEnum tlsMode)
         {
             // step 1: Open a new connection and get factory ...
@@ -349,7 +404,16 @@ namespace ZIMap
             progress.Done();
             return true;
         }
-        
+
+        /// <summary>
+        /// Logout and close the IMap connection.
+        /// </summary>
+        /// <remarks>
+        /// If a user is logged in this command sends an IMap LOGOUT command.  If also
+        /// closes the connection if it is open.  The <see cref="ZIMapFactory"/>
+        /// object gets released.  After a call to this method a connection can be
+        /// reestablished by calling <see cref="Connect(string, string)"/>. 
+        /// </remarks>
         public void Disconnect()
         {
             if(factory != null && IsLoggedIn)
@@ -409,27 +473,21 @@ namespace ZIMap
             {   get {   return (data & 0x10000) != 0;  }
                 set {   data = (uint)(value ? (data|0x10000) : (data&~0x10000));  }  
             }
-            /// <summary>Get or set the ReadOnly state information.</summary>
-            public bool ReadOnly
-            {   get {   return (data & 0x20000) != 0;  }
-                set {   data = (uint)(value ? (data|0x20000) : (data&~0x20000));  }  
-            }
-            /// <summary>Get or set a flag that indicates the presence of Detailed
-            /// information (Subscribed state and Message counts).</summary>
-            public bool Detailed
-            {   get {   return (data & 0x40000) != 0;  }
-                set {   data = (uint)(value ? (data|0x40000) : (data&~0x40000));  }  
-            }
-            /*
+            
+            /// <summary>Get or set a flag that indicates the presence of subscription
+            /// information (see <see cref="Subscribed"/>).</summary>
             public bool HasSubscription
             {   get {   return (data & 0x100000) != 0;  }
                 set {   data = (uint)(value ? (data|0x100000) : (data&~0x100000));  }  
             }
+
+            /// <summary>Get or set a flag that indicates the presence of Detailed
+            /// information (Message counts).</summary>
             public bool HasDetails
             {   get {   return (data & 0x400000) != 0;  }
                 set {   data = (uint)(value ? (data|0x400000) : (data&~0x400000));  }  
             }
-            */
+            
         }
 
         /// <summary>
@@ -494,13 +552,10 @@ namespace ZIMap
                 mbox[irun].Delimiter = i.Delimiter;
                 mbox[irun].Attributes = i.Attributes;
                 mbox[irun].Subscribed = (subscribed == 2);
-                //mbox[irun].HasDetails = detailed;
-                //mbox[irun].HasSubscription = (subscribed > 0);
                 if(detailed)
                 {   ZIMapCommand.Examine cmd = new ZIMapCommand.Examine(factory);
                     cmd.UserData = irun;
                     cmd.Queue(i.Name);
-                    mbox[irun].Detailed = true;
                 }
                 irun++;
             }
@@ -511,16 +566,20 @@ namespace ZIMap
                 progress.Update(20);
                 if(!cmdLSub.CheckSuccess())
                     MonitorError("Mailboxes: got no subscription info");
-                else if(items != null)
-                {   int icur = 0;
-                    foreach(ZIMapCommand.List.Item i in items)
-                    {   for(int imax=irun; imax > 0; imax--)
-                        {   if(icur >= irun) icur = 0;
-                            if(i.Name  == mbox[icur].Name)
-                            {   mbox[icur++].Subscribed = true;
-                                break;
+                else
+                {   for(uint usub=0; usub < mbox.Length; usub++) 
+                        mbox[usub].HasSubscription = true;
+                    if(items != null)
+                    {   int icur = 0;
+                        foreach(ZIMapCommand.List.Item i in items)
+                        {   for(int imax=irun; imax > 0; imax--)
+                            {   if(icur >= irun) icur = 0;
+                                if(i.Name  == mbox[icur].Name)
+                                {   mbox[icur++].Subscribed = true;
+                                    break;
+                                }
+                                icur++;
                             }
-                            icur++;
                         }
                     }
                 }
@@ -535,7 +594,7 @@ namespace ZIMap
             items = null;
             MonitorInfo("Mailboxes: Fetching " + irun + " details");
             progress.Update(25);
-            
+    // TODO: ZIMapApplication - The Mailboxes() code needs rewrite using bulk        
             factory.ExecuteCommands(true);
             ZIMapCommand[] cmds = factory.CompletedCommands;
             progress.Push(30, 100);
@@ -544,10 +603,11 @@ namespace ZIMap
             {   ZIMapCommand.Examine cmd = c as ZIMapCommand.Examine;
                 if(cmd == null) continue;
                 irun = (int)(cmd.UserData);
-                mbox[irun].Messages = cmd.Messages;
-                mbox[irun].Recent   = cmd.Recent;
-                mbox[irun].Unseen   = cmd.Unseen;
-                mbox[irun].Flags    = cmd.Flags;
+                mbox[irun].HasDetails = cmd.CheckSuccess();
+                mbox[irun].Messages   = cmd.Messages;
+                mbox[irun].Recent     = cmd.Recent;
+                mbox[irun].Unseen     = cmd.Unseen;
+                mbox[irun].Flags      = cmd.Flags;
                 progress.Update((uint)irun, (uint)mbox.Length); 
             }
             
@@ -787,6 +847,33 @@ namespace ZIMap
             return MailboxOpen(fullName, readOnly, false, out dummy);
         }
         
+        /// <summary>
+        /// Open a mailbox if not already open.
+        /// </summary>
+        /// <param name="fullName">
+        /// Fully qualified mailbox name.
+        /// </param>
+        /// <param name="readOnly">
+        /// When <c>true</c> the IMap "EXAMINE" command is used, otherwiese the
+        /// "SELECT" command.
+        /// </param>
+        /// <param name="returnDetails">
+        /// When <c>true</c> an IMap request is always made and the <paramref name="info"/>
+        /// data returns valid message counts.
+        /// </param>
+        /// <param name="info">
+        /// Always returns the mailbox name, message counts are only set when
+        /// <paramref name="returnDetails"/> is set.
+        /// </param>
+        /// <returns>
+        /// True <c>true</c> on success.
+        /// </returns>
+        /// <remarks>
+        /// If the mailbox is still open, <paramref name="returnDetails"/> is not set
+        /// and if the read only state will not change no IMap commmand ist sent.  The
+        /// neccessary information about the validity of the current mailbox is provided
+        /// by <see cref="ZIMapTransport.LastSelectTag"/>.
+        /// </remarks>
         public bool MailboxOpen(string fullName, bool readOnly, 
                                 bool returnDetails, out MailBox info) 
         {   info = new MailBox();
@@ -1138,7 +1225,7 @@ namespace ZIMap
         /// </remarks>
         public bool ExportWrite(string path, bool allowFile, bool preferVersions)
         {   ZIMapExport expo = Export;
-            expo.Versioning = true;
+            expo.Versioning = preferVersions;
             exportSerial = expo.Open(path, Server.DefaultDelimiter, allowFile, true);
             if(exportSerial == 0) return false;             // open failed
             exportWrite = true;

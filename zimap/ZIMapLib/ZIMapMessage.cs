@@ -103,7 +103,6 @@ namespace ZIMap
             while((line = LineOfBytes(data, ref position, ignoreXKeys)) != null)
             {
                 if(line.Length == 0) break;             // end of header
-                
                 // Handle continuation lines ...
                 if(line[0] <= SPACE)
                 {   if(val == null) continue;           // no val, oops!
@@ -406,6 +405,11 @@ namespace ZIMap
                 if(ignoreX && ulen >= 2 && buffer[position+1] == '-' &&
                    (buffer[position] == 'x' || buffer[position] == 'X'))
                 {   position = irun + 2;                // ignore this
+                    while(position < uend)              // find continuations
+                    {   if(buffer[position] == CR || buffer[position] > SPACE) break;
+                        if(LineOfBytes(buffer, ref position, false) == null) break;
+                        irun = position - 1;                       
+                    }
                     continue;
                 }
                 

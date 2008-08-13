@@ -52,7 +52,8 @@ namespace ZIMapTools
             private MBoxRef     users = MBoxRef.Nothing;
             private uint        boxesTime, usersTime;
             
-            private ZIMapApplication.MailInfo[] headers;
+//            private ZIMapApplication.MailInfo[] headers;
+            private MailRef     headers;
             private uint        headersTime;
 
             // list prefix (does not end with delimiter)
@@ -100,8 +101,11 @@ namespace ZIMapTools
                 SetInfo(Info.Shared, !others);
                 usersTime = Second();
             }
-
+/*
             protected void UpdateHeaders(ZIMapApplication.MailInfo[] headers)
+            {   this.headers = new MailRef(headers, "-");
+*/            
+            protected void UpdateHeaders(MailRef headers)
             {   this.headers = headers;
                 info |= Info.Headers;
                 headersTime = Second();
@@ -123,7 +127,7 @@ namespace ZIMapTools
             {   get {   return users; }
             }
 
-            public ZIMapApplication.MailInfo[] Headers
+            public MailRef Headers
             {   get {   return headers; }
             }
 
@@ -173,7 +177,7 @@ namespace ZIMapTools
                     info &= ~(Info.Others | Info.Shared);
                 }
                 if((what & Info.Headers) != 0)
-                {   headers = null; headersTime = 0;
+                {   headers = MailRef.Nothing; headersTime = 0;
                     info &= ~(Info.Headers);
                 }
                 return false;
@@ -222,12 +226,11 @@ namespace ZIMapTools
         public struct MBoxRef
         {   // index in Boxes array
             private uint    index;
-            // ReadOnly status, see Open()
-            private bool    ronly;
+            // length of the mailbox array (allow array to be null without expensive tests) 
+            private uint    length;
             // The array of mailboxes
             private ZIMapApplication.MailBox[] boxes;
-            // Flags a "Nothing" reference
-            private static ZIMapApplication.MailBox[] nothing = new ZIMapApplication.MailBox[0];
+            
             // User for empty refernces
             private static ZIMapApplication.MailBox[] empty = new ZIMapApplication.MailBox[0];
             
@@ -235,25 +238,21 @@ namespace ZIMapTools
             public static readonly MBoxRef Nothing = new MBoxRef(null, uint.MaxValue); 
             
             public MBoxRef(bool asEmpty)
-            {   this.index = 0;
-                this.boxes = asEmpty ? empty : nothing;
-                ronly = true;
+            {   this.index  = 0;
+                this.length = 0;
+                this.boxes  = asEmpty ? null : empty;
             }
             
             public MBoxRef(ZIMapApplication.MailBox[] boxes)
-            {   if(boxes == null)         boxes = nothing;
-                else if(boxes.Length < 1) boxes = empty;
-                this.index = 0;
-                this.boxes = boxes;
-                ronly = true;
+            {   this.index  = 0;
+                this.length = (boxes == null) ? 0 : (uint)boxes.Length; 
+                this.boxes  = (length > 0) ? boxes : empty;
             }
             
             public MBoxRef(ZIMapApplication.MailBox[] boxes, uint index)
-            {   if(boxes == null)         boxes = nothing;
-                else if(boxes.Length < 1) boxes = empty;
-                this.index = index;
-                this.boxes = boxes;
-                ronly = true;
+            {   this.index  = index;
+                this.length = (boxes == null) ? 0 : (uint)boxes.Length; 
+                this.boxes  = (length > 0) ? boxes : empty;
             }
 
             // =================================================================
@@ -268,72 +267,71 @@ namespace ZIMapTools
             }
 
             public ZIMapApplication.MailBox Current
-            {   get {   return (index < boxes.Length) ? boxes[index] : new ZIMapApplication.MailBox();
+            {   get {   return (index < length) ? boxes[index] : new ZIMapApplication.MailBox();
                     }
             }
             
             /// <summary>Returns the number of mailboxes that this reference can access.</summary>
             /// <returns>On error <c>0</c> is returned.</returns>
             public uint Count
-            {   get {   return (uint)boxes.Length;  }
+            {   get {   return length;  }
             }
 
             /*
             /// <summary>Check if the mailbox has detailed info.</summary>
             public bool HasDetails
-            {   get {   return (index < boxes.Length) ? boxes[index].HasDetails : false; 
+            {   get {   return (index < length) ? boxes[index].HasDetails : false; 
                     }
             }
             
             /// <summary>Check if the mailbox has subscription info.</summary>
             public bool HasSubscription
-            {   get {   return (index < boxes.Length) ? boxes[index].HasSubscription : false;   
+            {   get {   return (index < length) ? boxes[index].HasSubscription : false;   
                     }
             }*/
             
             /// <summary>Returns the current mailbox index.</summary>
             /// <returns>On error <see cref="uint.MaxValue" /> is returned.</returns>
             public uint Index
-            {   get {   if(boxes.Length <= 0) return uint.MaxValue;
-                        return index;   
+            {   get {   return (length > 0) ? index : uint.MaxValue;   
                     }
             }
 
             public bool IsNothing
-            {   get {   if(boxes == null) boxes = nothing;
-                        return object.ReferenceEquals(boxes, nothing); 
+            {   get {   return (boxes == null);
                     }
             }
 
             /// <summary>Checks if the reference points to a mailbox.</summary>
             /// <returns>When not referencing a mailbox <c>false</c> is returned.</returns>
             public bool IsValid
-            {   get {   return index < boxes.Length;
+            {   get {   return index < length;
                     }
             }
-           
+           /*
             /// <summary>Returns the read-only status of the mailbox.</summary>
             /// <returns>If a mailbox is read-only <c>true</c> is returned.</returns>
             public bool ReadOnly
-            {   get {   return ronly;   }
-            }
+            {   get {   return (index < length) ? boxes[index].ReadOnly : true;
+                    }
+            }*/
             
             /// <summary>Returns the name of the mailbox.</summary>
             /// <returns>On error <c>null</c> is returned.</returns>
             public string Name
-            {   get {   return (index < boxes.Length) ? boxes[index].Name : null;
+            {   get {   return (index < length) ? boxes[index].Name : null;
                     }
             }
             
             /// <summary>Returns the number of messages in the mailbox.</summary>
             /// <returns>On error <see cref="uint.MaxValue" /> is returned.</returns>
             public uint Messages
-            {   get {   return (index < boxes.Length) ? boxes[index].Messages : uint.MaxValue;
+            {   get {   return (index < length) ? boxes[index].Messages : uint.MaxValue;
                     }
             }
 
             public bool Subscribed
-            {   get {   return (index < boxes.Length) ? boxes[index].Subscribed : false;
+            {   get {   return (index < length) ? boxes[index].Subscribed : false;
                     }
             }
 
@@ -352,7 +350,7 @@ namespace ZIMapTools
             /// <summary>Check if the reference contains extra data for the mailbox.</summary>
             /// <returns>For availlable extra data <c>true</c> is returned.</returns>
             public bool HasExtra
-            {   get {   if(index >= boxes.Length) return false;
+            {   get {   if(index >= length) return false;
                         return boxes[index].UserData != null;
                     }
             }
@@ -410,18 +408,19 @@ namespace ZIMapTools
                 if(index == uint.MaxValue)              // set by Reset()
                 {   index = 0;  return true;
                 }
-                if(index >= boxes.Length) return false;
+                if(index >= length) return false;
                 index++;  
-                return index < boxes.Length;
+                return index < length;
             }
 
             /// <summary>Sets the current index.</summary>
             /// <returns>On success <c>true</c> is returned.</returns>
             public bool Next(uint position)
-            {   if (boxes == null || position >= boxes.Length) return false;
+            {   if (boxes == null || position >= length) return false;
                 index = position; return true;
             }
             
+            /// <summary>Prepary Index for a new iteration.</summary>
             public void Reset()            
             {   index = uint.MaxValue;
             }
@@ -470,15 +469,17 @@ namespace ZIMapTools
             /// <summary>Sends a EXAMINE or SELECT if neccessary.</summary>
             /// <returns>On success <c>true</c> is returned.</returns>
             public bool Open(ZIMapApplication application, bool readOnly)
-            {   bool bok = application.MailboxOpen(Name, readOnly);
-                ronly = application.MailboxIsReadonly;
+            {   if(!IsValid) return false;
+                if(readOnly || !application.MailboxIsReadonly)  // don't downgrade
+                    readOnly = application.MailboxIsReadonly;   
+                bool bok = application.MailboxOpen(Name, readOnly);
                 return bok;
             }
 
             /// <summary>Search the array for an exact name match.</summary>
             public uint Search(string name)
             {   if(boxes == null || string.IsNullOrEmpty(name)) return uint.MaxValue;
-                for(int irun=0; irun < boxes.Length; irun++)
+                for(int irun=0; irun < length; irun++)
                     if(boxes[irun].Name == name) return (uint)irun;
                 return uint.MaxValue;
             }
@@ -486,29 +487,141 @@ namespace ZIMapTools
             /// <summary>Append a new entry to the array.</summary>
             public bool Append(string boxname, char delimiter)
             {   if(string.IsNullOrEmpty(boxname)) return false;
-                int ilen = (boxes == null) ? 0 : boxes.Length;
-                if(ilen == 0) boxes = new ZIMapApplication.MailBox[1];
-                else          System.Array.Resize(ref boxes, ilen+1);
-                boxes[ilen].Name = boxname;
-                boxes[ilen].Delimiter = delimiter;
-                boxes[ilen].Attributes = ZIMapConverter.StringArray(0);
+                if(length == 0) boxes = new ZIMapApplication.MailBox[1];
+                else            System.Array.Resize(ref boxes, (int)(length+1));
+                boxes[length].Name = boxname;
+                boxes[length].Delimiter = delimiter;
+                boxes[length].Attributes = ZIMapConverter.StringArray(0);
+                length++;
                 return true;
             }
 
             /// <summary>Remove one entry from the array.</summary>
             public bool Delete(MBoxRef mbox)
             {   if(boxes == null || !mbox.IsValid) return false;
-                int ilen = boxes.Length;
                 uint index = mbox.Index;
                 if(!object.ReferenceEquals(boxes, mbox.boxes)) index = Search(mbox.Name);
-                if(ilen <= 0 || index >= ilen) return false;
-                ZIMapApplication.MailBox[] dest = new ZIMapApplication.MailBox[ilen-1];
+                if(length == 0 || index >= length) return false;
+                ZIMapApplication.MailBox[] dest = new ZIMapApplication.MailBox[--length];
                 if(index > 0) System.Array.Copy(boxes, dest, index);
-                int tail = ilen - (int)index - 1;
+                int tail = (int)(length - index);
                 if(tail > 0) System.Array.Copy(boxes, index+1, dest, index, tail);
                 boxes = dest;
                 return true;
             }
+        }
+
+        // =============================================================================
+        // MailRef     
+        // =============================================================================
+
+        public struct MailRef
+        {
+            public static readonly MailRef Nothing;
+            
+            private class MRefSegment
+            {   //public uint[]       ids;
+                //public bool         hasUIDs;
+                public ZIMapApplication.MailInfo[]  array;
+                public string       mailbox;
+                public MRefSegment  next;
+            }
+            
+            //
+            private uint        index;
+            //
+            private MRefSegment segment;
+
+            public MailRef(ZIMapApplication.MailInfo[] items, /*bool hasUIDs,*/ string mailbox)
+            {   segment = new MailRef.MRefSegment();
+                segment.array   = items;
+                //segment.hasUIDs = hasUIDs;
+                segment.mailbox = mailbox;
+                index = 0;
+            }
+            
+            public uint Index
+            {   get {   return index;   }
+                set {   index = (value >= Count) ? uint.MaxValue : value; }   
+            }
+            
+            public ZIMapApplication.MailInfo[] Array(uint segment)
+            {   MRefSegment seg = this.segment;
+                if(seg == null) return null;
+                while(segment > 0)
+                {   if(seg.next == null) return null;
+                    segment--;
+                }
+                return seg.array;
+            }
+/*            
+            public uint Id
+            {   get {   uint idx = index;
+                        MRefSegment seg = Segment(ref idx);
+                        return (seg == null) ? uint.MaxValue : seg.ids[idx];
+                    }
+            }
+*/            
+            public uint Count
+            {   get {   uint ucnt = 0;
+                        for(MRefSegment seg = segment; seg != null; seg = seg.next)
+                            ucnt += (uint)seg.array.Length;
+                        return ucnt;
+                    }
+            }
+/*
+            public bool HasUIDs
+            {   get {   return HasUIDs; }
+            }
+*/            
+            public bool IsNothing
+            {   get {   return segment.array == null; }
+            }
+
+            public string Mailbox
+            {   get {   uint idx = index;
+                        MRefSegment seg = Segment(ref idx);
+                        return (seg == null) ? null : seg.mailbox;
+                    }
+            }
+            
+            public bool Valid
+            {   get {   return index < Count;   }
+            }
+            
+            private MRefSegment Segment(ref uint idx)
+            {   uint uidx = 0;
+                uint uend;
+                for(MRefSegment seg = segment; seg != null; seg = seg.next)
+                {   uend = uidx + (uint)seg.array.Length;
+                    if(idx < uend)
+                    {   idx -= uidx; return seg;
+                    }
+                    uidx = uend;
+                }
+                return null;
+            }
+            
+            public bool Append(ZIMapApplication.MailInfo[] items, string mailbox)
+            {   if(items == null) return false;
+                uint unew = (uint)items.Length;
+                if(unew == 0) return true;
+                
+                MRefSegment seg = segment;
+                while(seg.next != null) seg = seg.next;     // get last segment
+                if(seg.mailbox == mailbox)                  // merge...
+                {   uint uold = (uint)seg.array.Length;
+                    System.Array.Resize(ref seg.array, (int)(uold+unew));
+                    System.Array.Copy(items, 0, seg.array, uold, unew);
+                    return true;
+                }
+                seg.next = new MailRef.MRefSegment();
+                seg.next.array   = items;
+                //seg.next.hasUIDs = seg.hasUIDs;
+                seg.next.mailbox = mailbox;
+                return true;
+            }
+            
         }
     }
 }

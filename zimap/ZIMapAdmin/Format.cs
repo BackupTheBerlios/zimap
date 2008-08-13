@@ -121,9 +121,16 @@ namespace ZIMapTools
                     if(mailbox.Subscribed) scnt++;
                 }
                 if(bDetail)
-                {   data[ucol++] = mailbox.Messages;
-                    data[ucol++] = mailbox.Recent;
-                    data[ucol++] = mailbox.Unseen;
+                {   if(mailbox.HasDetails)
+                    {   data[ucol++] = mailbox.Messages;
+                        data[ucol++] = mailbox.Recent;
+                        data[ucol++] = mailbox.Unseen;
+                    }
+                    else
+                    {   data[ucol++] = "-";
+                        data[ucol++] = "-";
+                        data[ucol++] = "-";
+                    }
                 }
                 if(bRights)
                     data[ucol++] = mailboxes.ExtraRights;
@@ -161,15 +168,16 @@ namespace ZIMapTools
         // =============================================================================
         //         
         // =============================================================================
-        public static bool ListMails(ZIMapApplication.MailInfo[] mails,
+        public static bool ListMails(CacheData.MailRef headers,
                            bool bTo, bool bFrom, bool bSubject, bool bDate, 
                            bool bSize, bool bFlags, bool bUID, bool bID)
-        {   if(mails == null) return false;
+        {   if(headers.IsNothing) return false;
+            ZIMapApplication.MailInfo[] mails = headers.Array(0);
             if(mails.Length < 1)
             {   Message("No mails");
                 return true;
             }
-            
+                
             uint ucol = 0;
             if(bTo)      ucol++;
             if(bFrom)    ucol++;
@@ -443,9 +451,9 @@ namespace ZIMapTools
                 ZIMapApplication.MailBox mbox = (ZIMapApplication.MailBox)what;
                 ListOutput(0, "          ", "Mailbox Information");
                 string msg = mbox.Name;
-                if(mbox.Name == Cache.Data.Current.Name)
+                if(mbox.Name ==  App.MailboxName)
                     msg = string.Format("{0} (current {1})", msg,
-                          Cache.Data.Current.ReadOnly ? "Read-Only" : "Writable");
+                          App.MailboxIsReadonly ? "Read-Only" : "Writable");
                 else
                     msg += " (not current)";
                 ListOutput(1, "Mailbox   ", msg);
@@ -473,7 +481,7 @@ namespace ZIMapTools
             // -----------------------------------------------------------------
             if(what is uint[])
             {   uint[] uarg = (uint[])what;
-                ZIMapApplication.MailInfo[] mails = Cache.Data.Headers;
+                ZIMapApplication.MailInfo[] mails = Cache.Data.Headers.Array(0);
                 
                 uint uuid = uarg[0];
                 uint urun;
@@ -489,7 +497,7 @@ namespace ZIMapTools
 
                 ZIMapMessage.BodyInfo info = null;
                 ZIMapCommand.Fetch cmd = new ZIMapCommand.Fetch(App.Factory);
-                cmd.UidCommand = true;
+                cmd.UidCommand = App.EnableUidCommands;
                 if((uarg[1] & 2) != 0)
                     cmd.Queue(uuid, "BODY BODY.PEEK[TEXT]");
                 else

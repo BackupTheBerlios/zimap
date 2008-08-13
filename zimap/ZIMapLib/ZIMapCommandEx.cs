@@ -28,9 +28,6 @@ namespace ZIMap
         // ACL            RFC 4314    http://www.faqs.org/rfcs/rfc4314.html
         // =====================================================================
 
-        // TODO: Implement IMap STARTTLS command        
-        // TODO: Implement IMap AUTHENTICATE command        
-
         // ---------------------------------------------------------------------
         // Append
         // ---------------------------------------------------------------------

@@ -110,12 +110,14 @@ namespace ZIMap
                     }
             }
 
+            /// <summary>Can be used to check if a file is empty</summary>
             public bool Empty
             {   get {   if(!Valid) return false;
                         return valid == 2;
                     }
             }
             
+            /// <summary>Tests if a file contains a valide mbox header</summary>
             public bool Valid
             {   get {   if(valid > 2) return false;
                         if(valid > 0) return true;
@@ -151,6 +153,8 @@ namespace ZIMap
         // --- class data ---        
 
         private const string            ENVIRONMENT_EXPATH = "ZIMAP_EXPATH";  
+        private const string            ENVIRONMENT_BADCHR = "ZIMAP_BADCHR";
+        private const string            DEFAULT_BADCHR = @"\/.:*?";
         private const byte              SPACE = 32;
         private const byte              CR = (byte)'\r';
         private const byte              LF = (byte)'\n';
@@ -159,10 +163,12 @@ namespace ZIMap
         /// <summary>Base folder for relative arguments of <see cref="Open"/></summary>
         public static string BaseFolder;
         /// <summary>Characters excluded from filenames</summary>
-        public static char[] BadChars = @"\/.:*?".ToCharArray();        
+        public static char[] BadFileNameChars;        
         /// <summary>Allow 8 bit characters in filenames</summary>
-        public static bool   Allow8Bit = true;
-        
+        public static bool   Allow8BitName = true;
+        /// <summary>Character used for bad characters in mailbox names</summary>
+        public static char   BadMBoxNameMark = '§';        
+
         // A counter for the Serial property
         private static uint serialCounter;
         
@@ -232,7 +238,9 @@ namespace ZIMap
         {   get {   return delimiter;   }
             set {   delimiter = value;  }
         }
-            
+
+        /// <summary>Get returns the (base-)folder set by <see cref="Open"/> and set
+        /// attempts to open an existing folder.</summary>
         public string       Folder
         {   get {   return folder;  }
             set {   if(Open(value, delimiter, false, false) == 0)
@@ -249,6 +257,8 @@ namespace ZIMap
                 }
         }
 
+        /// <summary>Get returns a file name set by <see cref="Open"/> and set
+        /// attempts to open an existing file.</summary>
         public string       Filename
         {   get {   return file;  }
             set {   if(Open(value, delimiter, true, false) == 0)
@@ -256,10 +266,13 @@ namespace ZIMap
                 }
         }
 
+        /// <summary>Can be used to get the last pseudo handle returned by <see cref="Open"/>.</summary>
         public uint         Serial
         {   get {   return serial; }
         }
 
+        /// <summary>Gets the stream for the currently open mbox file.  For the set operation only
+        /// <c>null</c> values are allowed and are used to close the stream.</summary>
         public Stream       IOStream
         {   get {   return stream;
                 }
@@ -280,8 +293,50 @@ namespace ZIMap
         // Import/Export 
         // =====================================================================
 
-        public uint Open(string path, char delimiter, 
-                         bool allowFile, bool allowCreate)
+        /// <summary>
+        /// Open or create a file or folder for export or import.
+        /// </summary>
+        /// <param name="path">
+        /// Name of a file or a path.
+        /// </param>
+        /// <param name="delimiter">
+        /// The hierarchy delimiter for the namespace the data belongs to.
+        /// </param>
+        /// <param name="allowFile">
+        /// When <c>true</c> the <paramref name="path"/> argument can be a file or
+        /// a folder, when <c>false</c> the path argument must specify a folder.
+        /// </param>
+        /// <param name="allowCreate">
+        /// When <c>true</c> a file or folder will be created as required. 
+        /// </param>
+        /// <returns>
+        /// A non-zero pseudo handle on success or <c>0</c> on error.
+        /// </returns>
+        /// <remarks>
+        /// If <paramref name="path"/> names are not rooted (e.g. are relative paths) the
+        /// <see cref="BaseFolder"/> prefix is used.  When this prefix is not set the
+        /// environment variable <c>ZIMAP_EXPATH</c> is used.
+        /// <para />
+        /// If a value of <c>0</c> is passed for <paramref name="delimiter"/> the default
+        /// value from <see cref="ZIMapFactory.HierarchyDelimiter"/> is used.
+        /// <para />
+        /// When a file or folder is to be created (see <paramref name="allowCreate"/>)
+        /// the base folder must exist.
+        /// <para />
+        /// The returned pseudo handle is implemented as a counter.  The returned value
+        /// is also accessible from the <see cref="Serial"/> property.  This mechanism
+        /// permits a higher level class like <see cref="ZIMapApplication"/> to become 
+        /// aware of calls that other software layers made to this method.
+        /// <para />
+        /// Exisiting files are not physically opened by this method, a successfull call
+        /// does not neccessarily indicate that the file can be read or written.  Files are
+        /// physically opened only by <see cref="ReadMailbox"/> and <see cref="WriteMailbox"/>.
+        /// <para />
+        /// When a folder is used to store mbox data the files in this folder can automatically
+        /// be versioned.  This feature is controlled by <see cref="Versioning"/>.  Single
+        /// output files are not automatically versioned.
+        /// </remarks>
+        public uint Open(string path, char delimiter, bool allowFile, bool allowCreate)
         {   // check environment if BaseFolder is null
             if(BaseFolder == null)
             {   BaseFolder = System.Environment.GetEnvironmentVariable(ENVIRONMENT_EXPATH);
@@ -362,14 +417,6 @@ namespace ZIMap
         // Public Interface
         // =============================================================================
         
-        public MailFile[] xExistingWithVersions(bool wantVersions)
-        {   if(!wantVersions) return Existing;
-            if(existing != null && hasVersions) return existing;
-            hasVersions = true;
-            existing = ParseFolder(folder, delimiter, true);
-            return existing;
-        }
-        
         /// <summary>
         /// Creates a file for a mailbox that can be used for writing.
         /// </summary>
@@ -377,12 +424,21 @@ namespace ZIMap
         /// A mailbox name (without namespace prefix).
         /// </param>
         /// <returns>
-        /// On success <c>true</c> is returned.
+        /// On success <c>true</c> is returned.  The <see cref="IOStream"/> property might
+        /// be used to get access to the file data or the close an open file.
+        /// <para />
+        /// Before making calls to this function <see cref="Open"/> must have been called
+        /// to set-up the proper file name and/or folder.
+        /// <para />
+        /// When <see cref="Open"/> was used with a folder argument, the output files can
+        /// be automatically versioned, see the <see cref="Versioning"/> property.  When
+        /// versioning is off this method will delete all versions that were previously
+        /// created and the new file will not have a version suffix.
         /// </returns>
         public bool WriteMailbox(string mailbox)
-        {   IOStream = null;                            // property calls close   
+        {   IOStream = null;                                // property calls close
+            if(!versioning) CurrentMailFiles(true);         // need versions for clean-up
             int index = CheckMailboxArg(ref mailbox, false);
-                        MonitorInfo( mailbox + " " + index);
             if(index < -1) return false;
             
             string info = "Create new mbox file: ";
@@ -404,7 +460,19 @@ namespace ZIMap
                         info = "Create new version: ";
                     }
                     else
-                    {   enam = existing[index].FileName;
+                    {   MailFile mbox = existing[index];
+                        enam = mbox.FileName;
+                        string[] names = mbox.VersionNames;
+                        if(names != null) foreach(string name in names)
+                        {   string dfil = Path.Combine(folder, name);
+                            try
+                            {   File.Delete(dfil);
+                                MonitorInfo("Deleted: {0}", dfil);
+                            }
+                            catch
+                            {   MonitorInfo("Failed to delete: {0}", dfil);
+                            }
+                        }
                         info = "Override mbox file: ";
                     }                    
                 }
@@ -513,7 +581,6 @@ namespace ZIMap
                                 byte[] header, byte[] body, bool quoted)
         {   if(string.IsNullOrEmpty(from))  return false;
             if(header == null || body == null) return false;
-
             from = ZIMapMessage.AddressParse(from, true);            
             string text = string.Format("From {0} {1}", from, 
                                 ZIMapConverter.EncodeAscTime(date, true));
@@ -819,9 +886,9 @@ Console.WriteLine("unquote");
             if(chr >= '0' && chr <= '9') return true;
             if(chr <= 32 || chr == 127)  return false;
             if(chr == '_')               return false;
-            if(chr >= 128 && !Allow8Bit) return false;
-            for(int irun=0; irun < BadChars.Length; irun++)
-                if(chr == BadChars[irun]) return false;
+            if(chr >= 128 && !Allow8BitName) return false;
+            for(int irun=0; irun < BadFileNameChars.Length; irun++)
+                if(chr == BadFileNameChars[irun]) return false;
             return true;
         }
 
@@ -1004,15 +1071,27 @@ Console.WriteLine("unquote");
         ///      <term>+</term>
         ///      <description>63</description>
         /// </item></list>
-        /// /// <para/>
+        /// <para/>
         /// As can be seen one mailbox name can be encoded in different ways, especially
-        /// because the <see cref="BadChars"/> and  <see cref="Allow8Bit"/> properties can 
-        /// be used to restrict the unencoded set of characters for specific file systems.
+        /// because the <see cref="BadFileNameChars"/> and  <see cref="Allow8BitName"/> 
+        /// properties can be used to restrict the unencoded set of characters for specific
+        /// file systems.
         /// Anyhow, the <see cref="FileNameDecode"/> routine can get back to the original
         /// mailbox name from all possible encodings. 
+        /// <para/>
+        /// When <see cref="BadFileNameChars"/> is not set this method checks the environment
+        /// variable <c>ZIMAP_BADCHR</c> and uses its value instead of the default value.
         /// </remarks>
         public static string FileNameEncode(string mailbox, char delimiter, ushort version)
         {   if(string.IsNullOrEmpty(mailbox)) return mailbox;
+
+            // check ZIMAP_BADCHR environment variable on 1st call
+            if(BadFileNameChars == null)
+            {    string badc = System.Environment.GetEnvironmentVariable(ENVIRONMENT_BADCHR);
+                 if(badc == null) badc = DEFAULT_BADCHR;
+                 BadFileNameChars = badc.ToCharArray();
+            }
+
             StringBuilder sb = new StringBuilder();
             for(int irun=0; irun < mailbox.Length; irun++)
             {   char curr = mailbox[irun];
@@ -1045,6 +1124,13 @@ Console.WriteLine("unquote");
         /// <returns>
         /// <c>true</c> on success.
         /// </returns>
+        /// <remarks>
+        /// Mailbox names are encoded in filesystem names in a portable way by the
+        /// <see cref="FileNameEncode"/> function.  The exact original name can be
+        /// restored - but it could now contain characters that are equal to the
+        /// local hierarchy delimiter.  Is this case these characters are replaced
+        /// by a marker character, see <see cref="BadMBoxNameMark"/>.
+        /// </remarks>
         public static string FileNameDecode(string encoded, char delimiter, out ushort version)
         {   version = 0;
             if(string.IsNullOrEmpty(encoded)) return encoded;
@@ -1062,7 +1148,10 @@ Console.WriteLine("unquote");
                     irun++;
                 }
                 else
-                    sb.Append(FileNameDecode(encoded, ref irun));
+                {   char ochr = FileNameDecode(encoded, ref irun);
+                    if(ochr == delimiter) ochr = BadMBoxNameMark;
+                    sb.Append(ochr);
+                }
             }
             return sb.ToString();
         }

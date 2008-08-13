@@ -27,7 +27,7 @@ namespace ZIMap
     /// The important point is that this class 'owns' the commands and can control
     /// their life cycle (see the <see cref="Commands"/> property for example). For
     /// an application it appears as if commands get automatically excuted in 
-    /// background. After the application has called the <see cref="ZIMapCommnd.Queue"/>
+    /// background. After the application has called the <see cref="ZIMapCommand.Queue"/>
     /// method, it can simply access the server response 
     /// (see <see cref="ZIMapCommand.Result"/>).  Obviously this will be blocking until
     /// the server response got received, but any number of commands can be run in
@@ -42,6 +42,10 @@ namespace ZIMap
     /// <para />
     /// Finally commands can be automatically or manually removed from the factory
     /// (see <see cref="DisposeCommands"/> and <see cref="EnableAutoDispose"/>).
+    /// <para />
+    /// For each connection there should be at most one factory.  For this reason the
+    /// class cannot be directly instantiated.  Use <see cref="ZIMapConnection.CommandLayer"/>
+    /// to get an instance that is parented by a connection. 
     /// <para />
     /// This class belongs to the <c>Command</c> layer which is the second highest of four
     /// layers:
@@ -88,7 +92,14 @@ namespace ZIMap
         // set for ZIMapCommand.Login via QueueCommand()
         private string              username;
                 
-        // base has no def xtor ...
+        /// <summary>The one and only constructor.</summary>
+        /// <param name="parent">
+        /// The owning connection.
+        /// </param>
+        /// <remarks>
+        /// The constructor is protected, use <see cref="ZIMapConnection.CommandLayer"/>
+        /// to get an instance of a factory.
+        /// </remarks>
         protected ZIMapFactory(ZIMapConnection parent) : base(parent) {}
 
         // =====================================================================
@@ -98,9 +109,11 @@ namespace ZIMap
         /// <summary>
         /// On success an array of capability names -or- <c>null</c> on error.
         /// </summary>
+        /// <value>An array of strings where each string represents a 
+        /// capability name.</value>
         /// <remarks>
-        /// The factory caches the result, unless the proterty is manually
-        /// set to <c>null</c> it will always return the same object. Please
+        /// The factory caches the result and unless the property is explicitly
+        /// set to <c>null</c> it will always return the same object.  Please
         /// note that if the capabilites depend on the server state and thus
         /// change at login.
         /// </remarks>
@@ -128,12 +141,17 @@ namespace ZIMap
         }
 
         /// <summary>
-        /// Controls if <see cref="DisposeCommands"/> is called when a command
-        /// is disposed.
+        /// Controls if <see cref="DisposeCommands"/> gets called by commands
+        /// when they are disposed.
         /// </summary>
+        /// <value>The default value is <c>true</c>.</value>
         /// <remarks>
-        /// The <see cref="ZIMapCommand.Dispose"/> method calls 
+        /// The <see cref="ZIMapCommand.Dispose"/> method will call 
         /// <c>DisposeCommand(this, false)</c> if this property returns <c>true</c>.
+        /// <para />
+        /// Disabling auto dispose completely is somewhat exotic and should be avoided.
+        /// It is possible to disable auto dispose on a per command level, see
+        /// <see cref="ZIMapCommand.AutoDispose"/>.  
         /// </remarks>
         public bool EnableAutoDispose
         {   get {   return autoDispose; }
@@ -157,12 +175,15 @@ namespace ZIMap
         }
         
         /// <summary>
-        /// Returns the server's Hierarchy Delimiter character.
+        /// Gets os sets the server's default Hierarchy Delimiter character.
         /// </summary>
         /// <remarks>
         /// This command requires a valid login. Zero is returned if the
         /// delimiter character cannot be determined. On success the result
         /// get cached, only on the 1st call a 'List "" ""' command is sent.
+        /// <para />
+        /// This property also works when Namespace support is disabled. To
+        /// get the delimiter it issues an IMap <c>LIST "" ""</c> command.
         /// </remarks>
         public char HierarchyDelimiter
         {   get {   if(hierarchyDelimiter == (char)0)
@@ -176,13 +197,28 @@ namespace ZIMap
                     return hierarchyDelimiter;
                 }
             set {   hierarchyDelimiter = (char)0;
-                    //if(value != (char)0) RaiseError(ZIMapException.Error.MustBeZero);
                 }
         }
         
         /// <summary>
-        /// Return an array of all commands
+        /// Return an array of all commands that are attached to this factory instance.
         /// </summary>
+        /// <value>An array created from the internal command list.</value>
+        /// <remarks>
+        /// When no command is found, an empty array is returned.
+        /// <para />
+        /// The factory keeps all attached commands in a single list.  While 
+        /// <see cref="Commands"/> returns all commands independently of their state,
+        /// <see cref="CompletedCommands"/> and <see cref="RunningCommands"/> filter
+        /// the the data before returning a subset.<para />
+        /// <example><code lang="C#">
+        ///     int irun = RunningCommands.Length;
+        ///     int irdy = CompletedCommands.Length;
+        ///     int iall = Commands.Length;
+        ///     Console.WriteLine("AutoDispose={0}  Commands={1} (completed={2}  running={3})",
+        ///                                         EnableAutoDispose, iall, irdy, irun);
+        /// </code></example>
+        /// </remarks>
         public ZIMapCommand[] Commands
         {   get {   if(GetCommands() == null) return null;  // parent closed
                     return commands.ToArray();  
@@ -190,18 +226,33 @@ namespace ZIMap
         }
         
         /// <summary>
-        /// Return an array of all completed commands (success or failed)
+        /// Return an array of all completed commands (success or failed) that are still
+        /// attached to this factory instance.
         /// </summary>
+        /// <value>An array created from a subset of the internal command list.</value>
+        /// <remarks>
+        /// When no command with the appropriate state is found, an empty array is returned.
+        /// <para />
+        /// The factory keeps all attached commands in a single list.  While 
+        /// <see cref="Commands"/> returns all commands independently of their state,
+        /// <see cref="CompletedCommands"/> and <see cref="RunningCommands"/> filter
+        /// the the data before returning a subset.
+        /// </remarks>
         public ZIMapCommand[] CompletedCommands
         {   get {   return GetCommands(true);  }
         }
         
-        /// <summary>Get commands that are running but not yet completed</summary>
-        /// <summary>Return an array of all running commands</summary>
+        /// <summary>Get commands that are running but not yet completed and that
+        /// are attached to this factory instance.
+        /// </summary>
         /// <remarks>
         /// When no command with state <see cref="ZIMapCommand.CommandState.Running"/>
-        /// is found, an empty array is returned, see <see cref="GetCommands(bool)"/> for
-        /// details.
+        /// is found, an empty array is returned.
+        /// <para />
+        /// The factory keeps all attached commands in a single list.  While 
+        /// <see cref="Commands"/> returns all commands independently of their state,
+        /// <see cref="CompletedCommands"/> and <see cref="RunningCommands"/> filter
+        /// the the data before returning a subset.
         /// </remarks>
         public ZIMapCommand[] RunningCommands
         {   get {   return GetCommands(false);  }
@@ -225,7 +276,8 @@ namespace ZIMap
         /// Release all resources, cancel commands.
         /// </summary>
         /// <remarks>
-        /// Does little more than a call to <see cref="DisposeCommands"/>.
+        /// This method calls <see cref="DisposeCommands"/> to cancel all commands
+        /// and resets the factory instance to its initial state.
         /// </remarks>
         public void Dispose()
         {   if(commands == null)                    // nothing to do...
@@ -234,6 +286,7 @@ namespace ZIMap
             capabilities = null;
             hierarchyDelimiter = (char)0;
             commands = null;
+            username = null;
             autoDispose = true;
         }
 
@@ -241,13 +294,15 @@ namespace ZIMap
         /// Release and cancel commands.
         /// </summary>
         /// <remarks>
-        /// When a command is given as 1st argument this command and all commands
-        /// that a older get disposed unless they are still busy. The given 
-        /// command must have been sent (e.g. must have a non-zero Tag).
+        /// When a command instance is passed as 1st argument this command and all commands
+        /// with a lower Tag number (e.g. that are older) get disposed unless they are still
+        /// busy. The given command must have been sent (e.g. must have a non-zero Tag).
+        /// This method is invoked by <see cref="ZIMapCommand.Dispose"/> method if the owning
+        /// factorie's <see cref="EnableAutoDispose"/> property is set.
         /// <para />
-        /// Unsually only command the have <see cref="ZIMapCommand.AutoDispose"/>
-        /// set are affected. A call with <c>overrideAutoDispose</c> overrides
-        /// this check.
+        /// Unsually one would like that only commands having the <see cref="ZIMapCommand.AutoDispose"/>
+        /// property set are affected.  A call with <paramref name="overrideAutoDispose"/> 
+        /// set <c>true</c> will include all commands.
         /// </remarks>
         public bool DisposeCommands(ZIMapCommand lastToDispose, bool overrideAutoDispose)
         {
@@ -271,8 +326,8 @@ namespace ZIMap
                 {   if(cmd.Tag > tag) continue;             // younger than target
                     if(!overrideAutoDispose && !cmd.AutoDispose)
                                                   continue; // no autoDispose
-                   MonitorDebug("Disposing (auto): " + cmd.Tag);
-                   cmd.Dispose();
+                    MonitorDebug("Disposing (auto): " + cmd.Tag);
+                    cmd.Dispose();
                 }
             }
             finally
@@ -281,6 +336,7 @@ namespace ZIMap
             return true;
         }
 
+        // return all commands, never null (unless exception raised)
         private List<ZIMapCommand> GetCommands()
         {   if(commands != null) return commands;           // ok, on stock
             if( ((ZIMapConnection)Parent).CommandLayer != this)
@@ -291,6 +347,7 @@ namespace ZIMap
             return commands;                                // new list
         }
         
+        // return running or completed command, never null (unless exception)
         private ZIMapCommand[] GetCommands(bool bCompleted)
         {   if(GetCommands() == null) return null;          // parent closed
             int cntCompleted = 0;  int cntRunning = 0;
@@ -324,8 +381,39 @@ namespace ZIMap
             return arr;               
         }
 
+        /// <summary>
+        /// Attach a command to the factory, send request to server. 
+        /// </summary>
+        /// <param name="command">
+        /// The command that is to be attached and/or sent.
+        /// </param>
+        /// <returns>
+        /// Returns <c>true</c> on success.
+        /// </returns>
+        /// <remarks>
+        /// Normally this method is not invoked directly, but it get's called
+        /// automatically from <see cref="ZIMapCommand.Queue"/>.  This is also
+        /// the case for commands that were explicitly detached from the 
+        /// factory.
+        /// <para />
+        /// If the command is already attached to the factory it will first be
+        /// detached.  Then the command will be attached to the factory and will
+        /// be placed at the beginning of the commands list.  If the command
+        /// is not in the state <see cref="ZIMapCommand.CommandState.Queued"/>
+        /// it will be queued (in other words: the request will be sent to
+        /// the server).
+        /// <para />
+        /// Usually commands get never explicitly detached from the factory that
+        /// owns them until they are disposed, see <see cref="DetachCommand"/>.
+        /// An error of type <see cref="ZIMapException.Error.InvalidArgument"/>
+        /// is raised if the command was created by another factory instance.
+        /// </remarks>
         public bool QueueCommand(ZIMapCommand command)
         {   if(GetCommands() == null) return false;         // parent closed
+            if(command.Parent != Parent)                    // my command?
+            {   RaiseError(ZIMapException.Error.InvalidArgument, "wrong owner");
+                return false;
+            }
             commands.Remove(command);                       // may fail: ok
             commands.Add(command);                          // move to start
             if(command.State == ZIMapCommand.CommandState.Queued)
@@ -333,8 +421,33 @@ namespace ZIMap
             return command.Queue();                         // tell the command
         }
 
+        /// <summary>
+        /// Remove a command from the commands list of the factory.
+        /// </summary>
+        /// <param name="command">
+        /// The command to be removed.
+        /// </param>
+        /// <returns>
+        /// Returns <c>true</c> on success.
+        /// </returns>
+        /// <remarks>
+        /// An error of type <see cref="ZIMapException.Error.InvalidArgument"/>
+        /// is raised if the command was created by another factory instance.
+        /// <para />
+        /// Usually commands get never explicitly detached from the factory that
+        /// owns them until they are disposed.  But an application that wants to keep
+        /// a command alife for a long time (to access the returned data or to reuse
+        /// it later) should eventually detach the command from the factory.
+        /// The <see cref="QueueCommand"/> method will (re-)attach it automatically 
+        /// when the command is reused.  This also happens when 
+        /// <see cref="ZIMapCommand.Queue"/> is called.
+        /// </remarks>
         public bool DetachCommand(ZIMapCommand command)
         {   if(GetCommands() == null) return false;         // parent closed
+            if(command.Parent != Parent)                    // my command?
+            {   RaiseError(ZIMapException.Error.InvalidArgument, "wrong owner");
+                return false;
+            }
             if(!commands.Remove(command))
                                       return false;         // not in list
             if(command.State != ZIMapCommand.CommandState.Disposed)
@@ -491,9 +604,9 @@ namespace ZIMap
         /// <returns>
         /// When the server has the capability <c>true</c> is returned.
         /// </returns>
-        /// <remarks>The first time this methode is called the library issues a
+        /// <remarks>The first time this method is called the library issues a
         /// <c>CAPABILITY</c> command the result stays cached unless a <c>null</c>
-        /// value is assigned to the <see cref="Capibilities"/> property.
+        /// value is assigned to the <see cref="Capabilities"/> property.
         /// </remarks>
         public bool HasCapability(string capname)
         {   return FindInStrings(Capabilities, 0, capname, false) >= 0;
@@ -518,10 +631,22 @@ namespace ZIMap
         /// An index value on success or <c>-1</c> on error.
         /// </returns>
         /// <remarks>
-        /// The routine should not throw any errors, all reference argument can safely
-        /// be <c>null</c>.
+        /// The routine should not throw any errors, all object reference arguments can
+        /// safely be <c>null</c>.
         /// <para/>
-        /// The search is always case insensitive.
+        /// The search is always case insensitive and stops with the 1st match.  To check
+        /// for the uniqueness of a match the function can be called a second time:<para />
+        /// <example><code lang="C#">
+        ///     string[] array = ...;
+        ///     int idx = ZIMapFactory.FindInStrings(array, 0, partialName, true);
+        ///     if(idx &lt; 0) return -1;                                       // not found at all
+        ///     if(partialName == array[idx]) return idx;  // exact match, work done.
+        ///     // 2nd pass...
+        ///     int amb = ZIMapFactory.FindInStrings(array, idx+1, partialName, true);
+        ///     if(amb &lt; 0) return idx;                                         // ok, no ambiguity
+        ///     if(partialName == array[amb]) return amb;  // exact match
+        ///     return -2;                                                               // ambigious
+        /// </code></example>
         /// </remarks>
         public static int FindInStrings(string[] strings, int start, string what, bool substring)
         {
@@ -557,8 +682,17 @@ namespace ZIMap
         /// On success a value of <c>true</c> is returned.
         /// </returns>
         /// <remarks>
-        /// The commands FETCH and STORE can return partially parsed data in their
-        /// Item arrays.  This function is made to search this data.
+        /// The commands FETCH and STORE can return data that is only partially parsed in
+        /// their Item arrays.  This function is provided to help searching such data.
+        /// The following example tries to retrieve 'INTERNALDATE' from a FETCH:<para />
+        /// <example><code lang="C#">
+        ///     DateTime date;
+        ///     string sdat;
+        ///     if (ZIMapFactory.FindInParts(item.Parts, "INTERNALDATE", out sdat))
+        ///         date = ZIMapConverter.DecodeIMapTime(sdat, true);
+        ///     else
+        ///         date = msg.DateBinary;
+        /// </code></example>
         /// </remarks>
         public static bool FindInParts(string[] parts, string item, out string text)
         {   text = "";
@@ -572,6 +706,25 @@ namespace ZIMap
             }
             return true;
         }
+        
+        /// <summary>
+        /// A string describing the factory for debug output.
+        /// </summary>
+        /// <returns>
+        /// A string like: 'AutoDispose=true  Commands=4 (completed=1  running=1)'
+        /// </returns>
+        /// <remarks>
+        /// This function is intended for debugging only and is not optimized for
+        /// performance. 
+        /// </remarks>
+        public override string ToString ()
+        {   int irun = RunningCommands.Length;
+            int irdy = CompletedCommands.Length;
+            int iall = commands.Count;
+            return string.Format("AutoDispose={0}  Commands={1} (completed={2}  running={3})",
+                                 EnableAutoDispose, iall, irdy, irun);
+        }
+
         
         // =====================================================================
         // The Bulk command class
