@@ -290,11 +290,11 @@ namespace ZTool
         }
         
         public static void Extra(string message)
-        {   WriteWithPrefix(Modes.Extra, PrefixDebug, message, null);
+        {   WriteWithPrefix(Modes.Extra, PrefixExtra, message, null);
         }
         
         public static void Extra(string format, params object[] args)
-        {   WriteWithPrefix(Modes.Extra, PrefixDebug, format, args);
+        {   WriteWithPrefix(Modes.Extra, PrefixExtra, format, args);
         }
 
         // =====================================================================
@@ -435,13 +435,13 @@ namespace ZTool
         /// <summary>Reference to the default output attributes</summary>
         public static readonly TextAttributes Modes = new TextAttributes();
 
-        /// <summary>Prefix for output with <see cref="Message" (default is "   ")/></summary>
+        /// <summary>Prefix for output with <see cref="Message(string)"/> (default is "   ")</summary>
         public static string PrefixMessage = "    ";
-        /// <summary>Prefix for output with <see cref="Debug" (default is "*  ")/></summary>
-        public static string PrefixDebug   = "*   ";
-        /// <summary>Prefix for output with <see cref="Info" (default is "** ")/></summary>
+        /// <summary>Prefix for output with <see cref="Extra(string)"/> (default is "*  ")</summary>
+        public static string PrefixExtra   = "*   ";
+        /// <summary>Prefix for output with <see cref="Info(string)"/> (default is "** ")</summary>
         public static string PrefixInfo    = "**  ";
-        /// <summary>Prefix for output with <see cref="Error" (default is "***")/></summary>
+        /// <summary>Prefix for output with <see cref="Error(string)"/> (default is "***")</summary>
         public static string PrefixError   = "*** ";
 
         /// <summary>Characters written after the prompt text</summary>

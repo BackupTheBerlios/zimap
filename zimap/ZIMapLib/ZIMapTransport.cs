@@ -179,7 +179,7 @@ namespace ZIMap
         /// <value>A value of <c>true</c> indicates that a server reply is queued.
         /// This does not always indicate that Receive calls are non-blocking, because
         /// literal data may still be pending.</value>
-        /// <remarks>This property is a shortcut for calling <see cref="Poll"></see>
+        /// <remarks>This property is a shortcut for calling <see cref="Poll(uint)"></see>
         /// with <c>0</c> as argument.</remarks>
         public bool IsReady
         {   get {   return Poll(0); }

@@ -16,7 +16,7 @@ using ZTool;
 namespace ZIMapTools
 {
     /// <summary>
-    /// The is a "high level" software layer accesss to access IMap data via 
+    /// This class is a "high level" software layer to add caching of IMap data via 
     /// ZIMapLib.
     /// </summary>
     public partial class CacheData : ZIMapBase
@@ -278,23 +278,28 @@ namespace ZIMapTools
             // build sort array ...
             object[] keys = new object[ulen];
             for(uint urun=0; urun < ulen; urun++)
-            {   if(mail != null)
+		    {   // TODO: should use an iterator or Next()
+				ZIMapApplication.MailInfo info = headers.Array(0)[urun];
+				if(mail != null)
                 {   progress.Update(urun, ulen);
-                    mail.Parse(headers[urun].Literal, true);
+					
+                    mail.Parse(info.Literal, true);
                 }
                 switch(field)
-                {   case "size":    keys[urun] = headers[urun].Size; break;
-                    case "flags":   keys[urun] = string.Join(" ", headers[urun].Flags); break;
-                    case "id":      keys[urun] = headers[urun].Index; break;
-                    case "uid":     keys[urun] = headers[urun].UID; break;
+                {   case "size":    keys[urun] = info.Size; break;
+                    case "flags":   keys[urun] = string.Join(" ", info.Flags); break;
+                    case "id":      keys[urun] = info.Index; break;
+                    case "uid":     keys[urun] = info.UID; break;
                     case "to":      keys[urun] = mail.To; break;
                     case "from":    keys[urun] = mail.From; break;
                     case "subject": keys[urun] = mail.Subject; break;
                     case "date":    keys[urun] = mail.DateBinary; break;
                  }                
             }
-            Array.Sort(keys, headers.Array);
-            if(reverse) Array.Reverse(headers.Array);
+			
+			// TODO: should use a sort method, this code is wrong!
+            Array.Sort(keys, headers.Array(0));
+            if(reverse) Array.Reverse(headers.Array(0));
             return true;
         }
 
@@ -709,10 +714,11 @@ namespace ZIMapTools
                 return null;
             }
             
-            ZIMapApplication.MailInfo[] headers = data.Headers;
+			// TODO: use an iterator, this code is wrong
+            ZIMapApplication.MailInfo[] headers = data.Headers.Array(0);
             if(headers == null)
             {   if(!HeadersLoad()) return null;
-                headers = data.Headers;
+                headers = data.Headers.Array(0);
             }
             uint argCount = (argLeng > argOffset) ? argLeng - argOffset : 0;
 

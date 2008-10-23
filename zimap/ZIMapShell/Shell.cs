@@ -7,36 +7,58 @@ using System.Text;
 using System.Collections.Generic;
 
 using ZTool;
+using ZIMap;
 
-namespace ZIMap
+namespace ZIMapTools
 {
-    // =========================================================================
-    // Hook ZIMapLib to format Debug/Error messages 
-    // =========================================================================
-    class IMapCallback : ZIMapConnection.CallbackDummy
-    {
-        public override bool Monitor(ZIMapConnection connection, ZIMapConnection.Monitor level, 
-                                     string origin, string message)
-        {   if(origin == null || message == null) return true;
-            switch(level)
-            {   case ZIMapConnection.Monitor.Debug:    
-                        LineTool.Extra("{0}: {1}", origin, message); return true;
-                case ZIMapConnection.Monitor.Info:    
-                        LineTool.Info("{0}: {1}", origin, message); return true;
-                case ZIMapConnection.Monitor.Error:
-                        LineTool.Error("{0}: {1}", origin, message); return true;
-            }
-            return true;
-        }
-    }
-    
     // =========================================================================
     // Class to implement the ZIMapShell program 
     // =========================================================================
+	
+	/// <summary>
+	/// A simple interactive IMAP command shell. 
+	/// </summary>
+	/// This program knows about IMAP data encodings (literals and mailbox names
+	/// for example) and supports SSL.  It is a nice tool for learning IMAP
+	/// commands by trying them out interactively.
     class ZIMapShell
     {
-        // The loop that does the real work
-        public static bool Run(string server, string prot, 
+	    // =====================================================================
+	    // Hook ZIMapLib to format Debug/Error messages 
+	    // =====================================================================
+
+	    class IMapCallback : ZIMapConnection.CallbackDummy
+	    {
+	        public override bool Monitor(ZIMapConnection connection, ZIMapConnection.Monitor level, 
+	                                     string origin, string message)
+	        {   if(origin == null || message == null) return true;
+	            switch(level)
+	            {   case ZIMapConnection.Monitor.Debug:    
+	                        LineTool.Extra("{0}: {1}", origin, message); return true;
+	                case ZIMapConnection.Monitor.Info:    
+	                        LineTool.Info("{0}: {1}", origin, message); return true;
+	                case ZIMapConnection.Monitor.Error:
+	                        LineTool.Error("{0}: {1}", origin, message); return true;
+	            }
+	            return true;
+	        }
+	    }
+    
+	    // =====================================================================
+        // The 'command loop' routine
+	    // =====================================================================
+
+		/// <summary>The 'command loop' routine</summary>
+		/// <param name="server">A name or URL to contact the server</param>
+		/// <param name="prot">A protocol name like 'imap' or 'imaps'</param>
+		/// <param name="mode">SSL handling, see 
+		///        <see cref="ZIMapConnection.TlsModeEnum"/></param>
+		/// <param name="timeout">Timeout in [s]</param>
+		/// <param name="account">The IMAP account (user) to be used</param>
+		/// <param name="password">Password for the given account</param>
+		/// <param name="debug">Turns debug output on</param>
+		/// <returns><c>true</c> on success</returns>
+		public static bool Run(string server, string prot, 
                                ZIMapConnection.TlsModeEnum mode, uint timeout,
                                string account, string password, bool debug)
         {
@@ -81,6 +103,7 @@ namespace ZIMap
                 }
             }
             
+            // The loop that does the real work
             string[] command;
             while((command = LineTool.Prompt("IMAP", 2)) != null) {
                 try {
@@ -105,7 +128,7 @@ namespace ZIMap
             return true;
         }
         
-        // Print usage info
+        /// <summary>Print the usage info message.</summary> 
         public static void Usage()
         {   Console.WriteLine(ArgsTool.Usage(ArgsTool.UsageFormat.Usage,
                           ArgsTool.Param(options, "server",  false),
@@ -120,6 +143,10 @@ namespace ZIMap
             Console.WriteLine("\n{0}\n",
                           ArgsTool.Usage(ArgsTool.UsageFormat.Options, options));
         }
+
+	    // =====================================================================
+        // Parse the command line, connect to the server and run command loop
+	    // =====================================================================
         
         private static string[] options = {
             "server",   "host",     "Connect to a server at {host}",
@@ -132,8 +159,13 @@ namespace ZIMap
             "help",     "",         "Print this text and quit",
         };
 
-        // Parse the command line, connect to the server and run command loop
-        public static void Main(string[] args)
+		/// <summary>
+		/// Parse the command line, connect to the server and run command loop.
+		/// </summary>
+		/// <param name="args">
+		/// The command line arguments.
+		/// </param>
+		public static void Main(string[] args)
         {   string server  = null;
             string account = null;
             string password= null;

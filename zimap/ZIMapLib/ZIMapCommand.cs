@@ -781,7 +781,7 @@ namespace ZIMap
         /// either the command failed with an error status or the server did not return
         /// an 'untagged response' that matches the filter condition.
         /// <para />
-        /// This method simply forwards the call to <see cref="InfoParser(string, ref uint)"/>
+        /// This method simply forwards the call to <see cref="InfoParser(string, uint)"/>
         /// with an empty filter string and only uses the 1st 'untagged response'.
         /// </remarks>
         public ZIMapParser InfoParser()

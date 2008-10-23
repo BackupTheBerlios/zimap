@@ -84,7 +84,7 @@ namespace ZTool
         /// </returns>
         /// <remarks>
         /// The search is case sensitive.<para />
-        /// Return values <c>&lt;= 0</c>can be interpreted as <see cref="OptionStatus"/>
+        /// Return values <c>&lt;= 0</c> can be interpreted as <see cref="OptionStatus"/>
         /// </remarks>
         public static int Find(string[] options, string name)
         {   int offset = (int)OptionStatus.Undefined;
@@ -154,8 +154,17 @@ namespace ZTool
         }
         
         /// <summary>
-        /// Format option help like  [-myoption:{value}]
+        /// Formats a single option help like: <c>[-myoption:{value}]</c>
         /// </summary>
+        /// <param name="options">
+        /// An array of three strings per option, see <see cref="Usage"/>.
+        /// </param>
+        /// <param name="name">
+        /// The name to be searched in <paramref name="options"/>.
+        /// </param>
+        /// <param name="optional">
+        /// Enclose the output in <c>[]</c> brackets.
+        /// </param>
         public static string Param(string[] options, string name, bool optional)
         {   
             StringBuilder sb = new StringBuilder();
@@ -176,7 +185,27 @@ namespace ZTool
             if(optional) sb.Append(']');
             return sb.ToString();
         }
-        
+
+		/// <summary>
+		/// Parse the command line arguments of an application.
+		/// </summary>
+		/// <param name="options">
+        /// An array of three strings per option, see <see cref="Usage"/>.
+		/// </param>
+		/// <param name="argv">
+		/// The argument array of the Main function for example.
+		/// </param>
+		/// <param name="extra">
+		/// Returns an array of non-option arguments (can be <c>null</c>).
+		/// </param>
+		/// <param name="allowExtra">
+		/// Allow extra arguments.  If <c>false</c> extra arguments will cause
+		/// the parse function to return in error.
+		/// </param>
+		/// <returns>
+		/// An array of <see cref="Option"/> items on success or <c>null</c>
+		/// on error (see <paramref name="allowExtra"/>).
+		/// </returns>
         private static Option[] Parse(string[] options, string[] argv, out string[] extra, bool allowExtra)
         {   extra = null;
             if(argv == null) return null;
@@ -239,10 +268,39 @@ namespace ZTool
             return optl.ToArray();
         }
 
+		/// <summary>
+		/// Parse the command line arguments of an application.
+		/// </summary>
+		/// <param name="options">
+        /// An array of three strings per option, see <see cref="Usage"/>.
+		/// </param>
+		/// <param name="argv">
+		/// The argument array of the Main function for example.
+		/// </param>
+		/// <param name="extraArgs">
+		/// Returns an array of non-option arguments.
+		/// </param>
+		/// <returns>
+		/// An array of <see cref="Option"/> items on success or <c>null</c> on error.
+		/// </returns>
         public static Option[] Parse(string[] options, string[] argv, out string[] extraArgs)
         {   return Parse(options, argv, out extraArgs, true);
         }
         
+		/// <summary>
+		/// Parse the command line arguments of an application.
+		/// </summary>
+		/// <param name="options">
+        /// An array of three strings per option, see <see cref="Usage"/>.
+		/// </param>
+		/// <param name="argv">
+		/// The argument array of the Main function for example.
+		/// </param>
+		/// <returns>
+		/// An array of <see cref="Option"/> items on success or <c>null</c> on error.
+		/// </returns>
+		/// This overload does not allow extra arguments.  Any non-option argument
+		/// will make the function fail (e.g. returning <c>null</c>).
         public static Option[] Parse(string[] options, string[] argv)
         {   string[] extra;
             Option[] opts = Parse(options, argv, out extra, false);
@@ -280,6 +338,34 @@ namespace ZTool
         /// <see cref="UsageFormat.Options"/>.  For all other formats
         /// the <see cref="object.ToString"/> gets called.
         /// </remarks>
+        /// <b>Example:</b>
+		/// <code>
+        /// private static string[] options = {
+        ///     "server",   "host",     "Connect to a server at {host}",
+        ///     "protocol", "name",     "Use the protocol {name}        (default: imap)",
+        ///     "account",  "user",     "Login using the {user} account",
+        ///     "password", "text",     "Use the login password {text}",
+        ///     "timeout",  "seconds",  "Connection/Read/Write timeout  (default: 30)",
+        ///     "ascii",    "",         "Do not use line drawing chars or colors",
+        ///     "debug",    "",         "Output debug information",
+        ///     "help",     "",         "Print this text and quit",
+        /// };
+        /// 
+        /// public static void Usage()
+        /// {   Console.WriteLine(ArgsTool.Usage(ArgsTool.UsageFormat.Usage,
+        ///                   ArgsTool.Param(options, "server",  false),
+        ///                   ArgsTool.Param(options, "protocol", true),
+        ///                   ArgsTool.Param(options, "account",  true)));
+        ///     Console.WriteLine(ArgsTool.Usage(ArgsTool.UsageFormat.Cont,
+        ///                   ArgsTool.Param(options, "password", true),
+        ///                   ArgsTool.Param(options, "timeout",  true),
+        ///                   ArgsTool.Param(options, "ascii",    true),
+        ///                   ArgsTool.Param(options, "debug",    true)));
+        ///     Console.WriteLine(ArgsTool.Usage(ArgsTool.UsageFormat.More, "-help"));
+        ///     Console.WriteLine("\n{0}\n",
+        ///                   ArgsTool.Usage(ArgsTool.UsageFormat.Options, options));
+        /// }
+		/// </code>
         public static string Usage(UsageFormat mode, params object[] pars)
         {
             StringBuilder sb = new StringBuilder();
@@ -290,9 +376,7 @@ namespace ZTool
             else if(mode == UsageFormat.Cont)
                 sb.Append(' ', ArgsTool.AppName.Length + 9);
             else
-            {   sb.Append(List((string[])pars, "Options: "));
-                return sb.ToString();
-            }
+                return List((string[])pars, "Options: ");
             
             sb.Append(' ');
             foreach(object o in pars) sb.Append(o);

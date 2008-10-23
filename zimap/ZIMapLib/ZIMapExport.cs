@@ -569,12 +569,19 @@ namespace ZIMap
         /// <param name="body">
         /// A <see cref="System.Byte"/>
         /// </param>
+        /// <param name="quoted">
+        /// Enables 'From' quoting in message bodies, see below.
+        /// </param>
         // <param name="quoted">Do not use Content-Length, and do From 
         // (un)quoting instead.</param>
         /// <returns>
         /// A <see cref="System.Boolean"/>
         /// </returns>
         /// <remarks>
+        /// A problem of the mbox format is 'From' quoting - mails in a mbox
+        /// file are separated by 'From' lines, but such lines could also
+        /// appear in the message body.  Without quoting this would break the
+        /// import.  Unfortunately not all importers handle 'From' quoting, see:
         /// http://homepages.tesco.net/J.deBoynePollard/FGA/mail-mbox-formats.html
         /// </remarks>
         public bool WriteMail(string from, DateTime date, string flags,

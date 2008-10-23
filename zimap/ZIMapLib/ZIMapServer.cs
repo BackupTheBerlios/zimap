@@ -205,7 +205,7 @@ namespace ZIMap
         }
 
         /// <summary>
-        /// Returns the hierarchy delimiter from the personal Namespace.
+        /// Returns the hierarchy delimiter from the 'personal' Namespace.
         /// </summary>
         public char DefaultDelimiter
         {   get {   return NamespaceData(Personal).Delimiter;   }
@@ -672,7 +672,7 @@ namespace ZIMap
         /// <remarks>
         /// This method can be used by a caller who wants to upgrade the current rights
         /// to a requested level.  The result is either <c>null</c> if the current rigths
-        /// are sufficient or a string that can be used with <c>SetACL/c> to obtain the
+        /// are sufficient or a string that can be used with <c>SetACL</c> to obtain the
         /// requested rights.  The method calls <see cref="RightsByName"/> and may throw
         /// an exception for invalid values of <paramref name="request"/>. 
         /// </remarks>

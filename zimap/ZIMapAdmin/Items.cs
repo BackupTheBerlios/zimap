@@ -17,11 +17,14 @@ using ZTool;
 
 namespace ZIMapTools
 {
-    /// <summary>
-    /// Manage the caching of IMap data.
-    /// </summary>
+    /// <remarks>
+    /// The CacheData class defines some nested classes and structures to implement
+    /// data caching: DataRef (top level), MBoxRef (sets of mailboxes) and MailRef
+	/// (sets of mail headers).
+    /// </remarks>
     public partial class CacheData : ZIMapBase
-    {  
+    {
+        /// <summary>Enumerates cacheable entities.</summary>
         public enum Info
         {   All=255,
             /// <summary>Folders with current Prefix</summary>
@@ -39,11 +42,14 @@ namespace ZIMapTools
             /// <summary>Mail headers of current Folder</summary>
             Headers=128,
         };
-        
+
         // =============================================================================
         // DataRef     
         // =============================================================================
 
+		/// <summary>
+		/// Class to implement the top level of data caching.
+		/// </summary>
         public abstract class DataRef
         {
             private MBoxRef     current = MBoxRef.Nothing;
@@ -51,7 +57,7 @@ namespace ZIMapTools
             private MBoxRef     boxes = MBoxRef.Nothing;
             private MBoxRef     users = MBoxRef.Nothing;
             private uint        boxesTime, usersTime;
-            
+
 //            private ZIMapApplication.MailInfo[] headers;
             private MailRef     headers;
             private uint        headersTime;
@@ -71,18 +77,18 @@ namespace ZIMapTools
             // =================================================================
             // Methods
             // =================================================================
-                    
+
             protected abstract bool LoadData(Info what);
 
             private void        SetInfo(Info what, bool val)
             {   if(val) info |= what;
                 else    info &= ~what;
             }
-            
+
             protected void UpdateCurrent(MBoxRef current)
             {   this.current = current;
             }
-            
+
             protected void UpdateFolders(MBoxRef boxes, bool details)
             {   this.boxes = boxes;
                 SetInfo(Info.Details, details);
@@ -223,6 +229,9 @@ namespace ZIMapTools
         // MBoxRef     
         // =============================================================================
 
+		/// <summary>
+		/// A structure to simplify the handling of sets of mailboxes.
+		/// </summary>
         public struct MBoxRef
         {   // index in Boxes array
             private uint    index;
@@ -425,9 +434,12 @@ namespace ZIMapTools
             {   index = uint.MaxValue;
             }
 
-            /// <summary>Iterator to enumerate a mailbox and its descendents.</summary>
+            /// <summary>Iterator to enumerate a mailbox and it's descendents.</summary>
             /// <param name="position">
             /// Set on return, must initially be <see cref="MBoxRef.Nothing"/>.
+            /// </param>
+            /// <param name="server">
+            /// Used for namespace support <see cref="ZIMapServer.FriendlyName"/>.
             /// </param>
             /// <returns>On success <c>true</c> is returned.</returns>
             /// <remarks>
