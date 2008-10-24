@@ -804,7 +804,7 @@ namespace ZIMapTools
             Info("Query has {0} arguments: {1}", extra == null ? 0 : extra.Length, search);
             ZIMapApplication.MailInfo[] mails = App.MailSearch(null, "", search, extra);
             if(mails == null) return false;
-            ListMails(new CacheData.MailRef(mails, "-"),
+            ListMails(new CacheData.MailRef(mails, null),
                       true, true, true, false, false, false, false, false);
             return true;
         }

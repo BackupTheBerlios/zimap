@@ -938,7 +938,7 @@ namespace ZIMap
             }
         
             /// <summary>
-            /// Helper for derived classed to implement Parse()/Reset().
+            /// Helper for derived classed to implement Parse() and Reset().
             /// </summary>
             /// <param name="reset">
             /// When <c>true</c> the call was caused by <see cref="Reset"/>.
@@ -964,8 +964,8 @@ namespace ZIMap
             /// <remarks>
             /// Usually this routine is called implicitly by properties that return
             /// the results of this parsing action. Note for implementors: this 
-            /// routine calls Parse(false), a derived class should not override
-            /// Parse() but do the work in <see cref="Parse(bool)"/>.
+            /// routine calls <c>Parse(false)</c> - derived classes should not override
+            /// Parse rather than do the work in <see cref="Parse(bool)"/>.
             /// </remarks>
             public virtual bool Parse()
             {

@@ -621,16 +621,30 @@ namespace ZIMap
         // Fetch mail headers
         // =====================================================================
         
-        public struct  MailInfo
+		/// <summary>
+		/// A structure holding all data of a mail item that was fetched from
+		/// an IMAP server. 
+		/// </summary>
+		public struct  MailInfo
         {
-            public uint     Index;              // index in mailbox
-            public uint     UID;                // uid (needs UID part)
-            public uint     Size;               // data size (needs RFC822.SIZE)
-            public string[] Parts;              // unparsed parts
-            public string[] Flags;              // flags (needs FLAGS)
-            public byte[]   Literal;            // literal data
+			/// <summary>The mail's index in the mailbox.</summary>
+            public uint     Index;
+			/// <summary>The mail uid (see UID command key).</summary>
+            public uint     UID;
+			/// <summary>Body data size (see RFC822.SIZE command key).</summary>
+            public uint     Size;
+			/// <summary>Array of tokens not parsed by ZIMapCommand .</summary>
+            public string[] Parts;
+			/// <summary>An array of mail flags (see FLAGS command key).</summary>
+            public string[] Flags;
+			/// <summary>An array of fetches literal data.</summary>
+            public byte[]   Literal; 
+			/// <summary>For application use (not used internally).</summary>
             public object   UserData;
-            
+
+			/// <summary>
+			/// A xtor to create a MailInfo from data returned by ZIMapCommand.Fetch
+			/// </summary>
             public MailInfo(ZIMapCommand.Fetch.Item item)
             {   Index   = item.Index;
                 UID     = item.UID;

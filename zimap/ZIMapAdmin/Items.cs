@@ -58,8 +58,7 @@ namespace ZIMapTools
             private MBoxRef     users = MBoxRef.Nothing;
             private uint        boxesTime, usersTime;
 
-//            private ZIMapApplication.MailInfo[] headers;
-            private MailRef     headers;
+            private MailRef     headers = MailRef.Nothing;
             private uint        headersTime;
 
             // list prefix (does not end with delimiter)
@@ -240,7 +239,7 @@ namespace ZIMapTools
             // The array of mailboxes
             private ZIMapApplication.MailBox[] boxes;
             
-            // User for empty refernces
+            // A singleton used for empty references
             private static ZIMapApplication.MailBox[] empty = new ZIMapApplication.MailBox[0];
             
             /// <summary>A static invalid reference.</summary>
@@ -269,12 +268,18 @@ namespace ZIMapTools
             // =================================================================
             
             /// <summary>Gets the array of mailboxes to which this instance refers to.</summary>
-            /// <returns>The result is never <c>null</c>, event for a "Nothing" reference.</returns>
+            /// <returns>The result is never <c>null</c>.  For an empty set of mailboxes
+			/// an empty array is returned.</returns>
             public ZIMapApplication.MailBox[] Array
             {   get {   return boxes;
                     }
             }
 
+			/// <summary>Returns a mailbox or <c>null</c> depending on <see cref="Index"/>.
+			/// </summary>.
+			/// <returns>This property returns <c>null</c> when <see cref="IsValid"/>
+			/// would return <c>false</c>.</returns>
+			/// See <see cref="Next()"/> for an example.
             public ZIMapApplication.MailBox Current
             {   get {   return (index < length) ? boxes[index] : new ZIMapApplication.MailBox();
                     }
@@ -300,19 +305,30 @@ namespace ZIMapTools
             }*/
             
             /// <summary>Returns the current mailbox index.</summary>
-            /// <returns>On error <see cref="uint.MaxValue" /> is returned.</returns>
+            /// <returns>On error (e.g for an empty mailbox set or at the end of
+            /// an enumeration) <c>uint.MaxValue"<c/> is returned.</returns>
+			/// The <see cref="Next(uint)"/> and <see cref="Reset()"/> methods can be
+			/// used to set the Index value. See <see cref="Next()"/> for an example
+			/// of an enumeration.
             public uint Index
             {   get {   return (length > 0) ? index : uint.MaxValue;   
                     }
             }
 
+            /// <summary>Checks if the set of mailboxes is empty.</summary>
+            /// <returns>For an empty set of mailboxes <c>true</c> is returned.</returns>
+			/// For an empty mailbox set <see cref="IsValid"/> will always return <c>false</c>.
             public bool IsNothing
             {   get {   return (boxes == null);
                     }
             }
 
-            /// <summary>Checks if the reference points to a mailbox.</summary>
+            /// <summary>Checks if the reference and <see cref="Index"/> point to a mailbox.
+            /// </summary>
             /// <returns>When not referencing a mailbox <c>false</c> is returned.</returns>
+			/// This property differs from <see cref="IsNothing"/> in so far that for
+			/// a non-empty set of mailboxes the return value depends on <see cref="Index"/>.
+			/// See also <see cref="Reset()"/> and <see cref="Next()"/>.
             public bool IsValid
             {   get {   return index < length;
                     }
@@ -327,6 +343,8 @@ namespace ZIMapTools
             
             /// <summary>Returns the name of the mailbox.</summary>
             /// <returns>On error <c>null</c> is returned.</returns>
+			/// It is safe to call this method even in cases were <see cref="Current"/>
+			/// would return <c>null</c>.
             public string Name
             {   get {   return (index < length) ? boxes[index].Name : null;
                     }
@@ -334,11 +352,17 @@ namespace ZIMapTools
             
             /// <summary>Returns the number of messages in the mailbox.</summary>
             /// <returns>On error <see cref="uint.MaxValue" /> is returned.</returns>
+			/// It is safe to call this method even in cases were <see cref="Current"/>
+			/// would return <c>null</c>.
             public uint Messages
             {   get {   return (index < length) ? boxes[index].Messages : uint.MaxValue;
                     }
             }
 
+            /// <summary>Checks if a mailbox is subscribed.</summary>
+            /// <returns>On error <see cref="false"/> is returned.</returns>
+			/// It is safe to call this method even in cases were <see cref="Current"/>
+			/// would return <c>null</c>.
             public bool Subscribed
             {   get {   return (index < length) ? boxes[index].Subscribed : false;
                     }
@@ -412,6 +436,16 @@ namespace ZIMapTools
             
             /// <summary>Advance the current index, can be used as iterator.</summary>
             /// <returns>On success <c>true</c> is returned.</returns>
+            /// <b>Example:</b>
+            /// <example><code lang="C#">
+            /// CacheData.MBoxRef data = ...;
+            /// # Enumerate all mail boxes in the set
+            /// data.Reset();
+            /// while(data.Next())
+            /// {   Console.WriteLine("Current index " + data.Index);
+            ///     Console.WriteLine("Message count " + data.Current.Messages);
+            /// }
+            /// </code></example> 
             public bool Next()
             {   if(boxes == null) return false;
                 if(index == uint.MaxValue)              // set by Reset()
@@ -422,14 +456,19 @@ namespace ZIMapTools
                 return index < length;
             }
 
-            /// <summary>Sets the current index.</summary>
+            /// <summary>Sets the current value of <see cref="Index"/>.</summary>
             /// <returns>On success <c>true</c> is returned.</returns>
+			/// This function fails on an attempt to set the position behind the
+			/// last item - use Reset() to make set an invalid position.
             public bool Next(uint position)
             {   if (boxes == null || position >= length) return false;
                 index = position; return true;
             }
             
-            /// <summary>Prepary Index for a new iteration.</summary>
+            /// <summary>Prepare <see cref="Index"/> for a new iteration.</summary>
+			/// The method sets the index to <c>uint.MaxValue</c> so that a call to
+			/// <see cref="IsValid"/> will fail but a call to <see cref="Next()"/>
+			/// will return the 1st item (if any).
             public void Reset()            
             {   index = uint.MaxValue;
             }
@@ -446,12 +485,12 @@ namespace ZIMapTools
             /// The returned <paramref name="position"/> should be used to access the
             /// data.<para/>
             /// <example><code lang="C#">
-            ///   uint udel = 0;
-            ///   CacheData.MBoxRef root = ...;
-            ///   CacheData.MBoxRef position = CacheData.MBoxRef.Nothing;
-            ///   while(umbx.Recurse(ref positioin, Server))
-            ///   {    if(position.Messages > 0) udel++
-            ///   }
+            /// uint udel = 0;
+            /// CacheData.MBoxRef root = ...;
+            /// CacheData.MBoxRef position = CacheData.MBoxRef.Nothing;
+            /// while(umbx.Recurse(ref positioin, Server))
+            /// {    if(position.Messages > 0) udel++
+            /// }
             /// </code></example> 
             /// </remarks>
             public bool Recurse(ref MBoxRef position, ZIMapServer server)
@@ -527,9 +566,13 @@ namespace ZIMapTools
         // MailRef     
         // =============================================================================
 
+		/// <summary>
+		/// Structure to manage a set of ZIMapApplication.MailInfo arrays
+		/// </summary>
         public struct MailRef
         {
-            public static readonly MailRef Nothing;
+            /// <summary>A static invalid reference.</summary>
+            public static readonly MailRef Nothing = new MailRef(null, null, uint.MaxValue);
             
             private class MRefSegment
             {   //public uint[]       ids;
@@ -544,14 +587,21 @@ namespace ZIMapTools
             //
             private MRefSegment segment;
 
-            public MailRef(ZIMapApplication.MailInfo[] items, /*bool hasUIDs,*/ string mailbox)
-            {   segment = new MailRef.MRefSegment();
+            public MailRef(ZIMapApplication.MailInfo[] items, /*bool hasUIDs,*/ string mailbox, uint index)
+			{   // TODO: pseudo names should be: <delimiter>name<delimiter>
+				if(mailbox == null) mailbox = ".unnamed.";
+				
+				segment = new MailRef.MRefSegment();
                 segment.array   = items;
                 //segment.hasUIDs = hasUIDs;
                 segment.mailbox = mailbox;
-                index = 0;
+                this.index = index;
             }
-            
+
+			public MailRef(ZIMapApplication.MailInfo[] items, string mailbox) : this(items, mailbox, 0)
+			{
+			}
+			
             public uint Index
             {   get {   return index;   }
                 set {   index = (value >= Count) ? uint.MaxValue : value; }   
