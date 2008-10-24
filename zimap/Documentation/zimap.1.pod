@@ -1,0 +1,213 @@
+=begin html
+
+<link rel="stylesheet" type="text/css" href="standard.css" />
+<script type="text/javascript" src="navigation.js"></script>
+<style>
+p  { text-align: justify; margin-left: 4mm; margin-right: 4mm }
+dt { text-align: justify; margin-left: 4mm; margin-right: 4mm; margin-bottom: -6pt }
+pre { margin-left: 4mm; margin-right: 4mm; background-color: rgb(248,248,240); border: 1px solid rgb(128,128,128); padding: 3pt; overflow: auto }
+</style>
+<body onload="navigation('Oct. 2008')"><div id="navitop"></div><div id="pagehdr"></div>
+
+=end html
+
+=head1 NAME
+
+zimap - IMap Tools [Launcher for ZIMapAdmin and ZIMapShell]
+
+=head1 SYNOPSIS
+
+=over 7
+
+=item B<zimap> [I<options>...] [B<logfile> I<path>] [B<server> I<name>] [B<admin>|B<run>|B<shell>|I<action>] [I<arguments>...] [B<--> I<commands>...]
+
+=item B<zimap credentials> [I<server> [I<account>]]
+
+=item B<zimap> B<-help>
+
+=back
+
+=head1 DESCRIPTION
+
+This script manages defaults, credentials and connection URLs for your IMap servers in a
+Linux friendly way.  After resolving defaults and configuration the script launches the
+B<ZIMapAdmin> program or the B<ZIMapShell> tool. This can greatly simplify connecting and
+logging-on to multiple IMap servers.
+
+Furthermore you can pass command sequences (batches) from the command line to the
+B<ZIMapAdmin> program.  This can be used to automate the creation or deletion of accounts
+or to export or to import mail data and is a very powerfull feature for advanced IMap
+administrators.
+
+There is special support for Samba - B<zimap> can act as a proxy for the scripts that the
+Samba daemon calls for user management actions when working as a domain controller.  This
+allows you to automate the creation and deletion (with automatic backup) of user mailboxes.
+
+=head1 EXAMPLES
+
+=over 7
+
+=item B<zimap run>
+
+Run the B<ZIMapAdmin> program and open a connection using defaults for the preferred
+server.  You might have to create a credentials file to be able to login at the server
+side.  See the B<credentials> example below.
+
+=item B<zimap shell>
+
+Run the B<ZIMapShell> program and open a connection using defaults for the preferred
+server.
+
+=item B<zimap server> I<host>
+
+Run the B<ZIMapAdmin> program and open a connection using defaults for the I<host>
+server.
+
+=item B<zimap credentials> I<server> I<account>
+
+Creates a credentials file (usually in $HOME/.zimap/) for a given server and (optionally)
+for a given account.
+
+=item B<zimap run> I<MySpam> B<-- show>
+
+Run the B<ZIMapAdmin> program and open a connection using defaults for the preferred
+server, open the folder I<MySpam> and use the B<show> command to list the mail headers.
+
+=back
+
+=head1 OPTIONS
+
+=over 7
+
+Options can be specified in a short form (hyphen followed by a single letter) or in a
+long form (two hyphens followed by three or more letters).  All options must be given
+immedeately after the the script name.  The options serve to control the input and
+output of the script, but not what actions to take (see below):
+
+=item B<-h> B<--help>
+
+Show a brief usage summary.
+
+=item B<-q> B<--quiet>
+
+Be silent, suppress warnings and informational messages.
+
+=item B<-v> B<--verbose>
+
+Output extra information, pass the B<--debug> option to the launched program.
+
+=item B<-n> B<--nothing>
+
+Do nothing, just quit after parsing the command line.
+
+=item B<-N> B<--no>
+
+Do not prompt for input, assume I<no> as answer for all questions.
+
+=item B<-Y> B<--yes>
+
+Do not prompt for input, assume I<yes> as answer for all questions.
+
+=back
+
+=head1 Actions
+
+Action keywords control the kind of work to be done by the script. Some of the keywords
+are immedeately followed by arguments. The order of keywords (plus their arguments) is 
+relevant. The keywords can usually be abbreviated to at least three letters.
+
+=over 7
+
+
+=item B<credentials> [I<server> [I<account>]]
+
+Prompts for credentials to be stored in the user's configuration folder (usually this
+is $HOME/.zimap/).  If a I<server> and optionally an I<account> are given they override
+the configured defaults. No other actions must be specified.
+
+This action is the preferred way to manage your login credentials. Do not edit the
+credentials by hand, the format may change in future versions without notice.
+
+=item B<logfile> I<path>
+
+Copy the console output to the logfile specified by I<path>. Currently this works only
+for the B<ZIMapAdmin> program.
+
+=item B<server> I<host>
+
+Overrides the configured preferred host. The argument can be an abbreviated hostname 
+(not containing dots) which is matched against a list of configured hosts to expand it.
+
+=item B<shell> [I<account>]
+
+Launches the B<ZIMapShell> program. The I<account> argument is optional and can be used
+to override the configured default. No further actions are allowed.
+
+=item B<run> [I<mailbox> | B<-> [I<account> | B<->]]
+
+Launches the B<ZIMapAdmin> program. This is also the default action and is only required
+if no other action argument is specified.  An otherwise empty command line would cause
+the script to imply the B<--help> option.
+
+The I<mailbox> and I<account> arguments are optional.  A given I<mailbox> will be opened
+(with write access).  Use a hyphen to skip this argument.  When an I<account> is given
+it overrides the configured default.
+
+=item B<admin>
+
+Launches the B<ZIMapAdmin> program using the configured administrator account.
+
+=item B<add> I<account>...
+
+Shorthand notation used to create new IMAP user accounts. The I<admin> action is implied,
+no further actions are allowed.
+
+=item B<remove> I<account>...
+
+Shorthand notation used to remove IMAP user account(s) with backup. The I<admin> action
+is implied, no further actions are allowed.
+
+=item B<purge> I<account>...
+
+Shorthand notation used to remove IMAP user account(s) wihtout backup. The I<admin> action
+is implied, no further actions are allowed.
+
+=item B<backup> I<account>...
+
+Shorthand notation used to create a backup for account(s). The I<admin> action is implied,
+no further actions are allowed.
+
+=item B<restore> I<mboxfile> I<account>
+
+Shorthand notation used to restore mail data for the given I<account> from a previous
+backup in I<mboxfile>. The I<admin> action is implied,
+no further actions are allowed.
+
+=item B<samba> I<command> I<arguments>...
+
+This action is required when B<zimap> is used in the I<smb.conf> file as a script proxy.
+The final script that gets called via Samba must be specified in the B<zimap> configuration.
+The purpose of this it to intercept domain management actions like creating or deleting a
+user.  The I<admin> action is implied, no further actions are allowed.
+
+Depending on the (new) user's group memberships an IMap account can be created or deleted.
+Before deleting an IMap account an automated backup of mail data can be configured. The
+B<zimap> configuration file contains some additional information on this topic.
+
+=back
+
+=head1 COPYRIGHT
+
+ZIMap, ZIMapLib, ZIMapTools and zimap are (C) 2008 Dr. Juergen Pfennig
+
+This software is published under GPLv3 license
+and has been written for educational purposes only,
+no warranties! Try it at your own risk.
+
+=begin html
+
+<div id="navibot"></div></body>
+
+=end html
+
+=cut

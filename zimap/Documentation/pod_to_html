@@ -1,0 +1,39 @@
+#!/bin/bash
+
+declare opt_force
+declare opt_title
+
+while [ $# -gt 0 ] ; do
+   case "$1" in
+   -f)   opt_force="x" ; shift ;;
+   -t)   opt_title="$2" ; shift ; shift ;;
+   *)    break ;;
+   esac
+done
+
+if [ $# = 0 ] ; then
+   echo "usage: ${0##*/} [-f] [-t title] pod_file [destdir | destfile]"
+   exit 2
+fi
+
+if [ ! -r "$1" ] ; then
+   echo "${0##*/}: Cannot read from: $1"
+   exit 2
+fi
+
+declare onam="${1%%.*}.html"
+
+if [ -d "$2" ] ; then
+   onam="${2%/}/${onam}"
+elif [ -n "$2" ] ; then
+   onam="$2"
+fi
+
+if [ -z "$opt_force" -a -f "$onam" ] ; then
+   read -p "${0##*/}: Destination '$onam' exists. Overwrite [yN] ? " a || echo
+   [ "$a" = "y" ] || exit 0
+fi
+
+[ -z "$opt_title" ] && opt_title="${1%%.*}: Manual Page"
+sed -e "s/=head1/=head2/g" "$1" | pod2html --noindex --title="$opt_title" --outfile "$onam"
+rm -f pod*.tmp

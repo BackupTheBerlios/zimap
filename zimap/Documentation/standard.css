@@ -1,0 +1,22 @@
+.function    { font-weight: bold; color: blue; background-color:
+               rgb(220,220,220); border: 1px solid rgb(128,128,128);
+               padding: 2pt }
+.normal    { font-size: medium; font-weight: normal; margin-top: 2mm; margin-bottom: 2mm }
+.section   { font-size: large; font-weight: bold; margin-top: 6mm; margin-bottom: 3mm }
+.tabsect   { font-weight: bold; padding-top: 6pt; padding-bottom: 6pt }
+.tabenum   { margin-left: 8mm }
+.fontfat   { font-weight: bold }
+.herebox   { margin-right: 10mm; border: 1px solid rgb(180,180,180); padding: 3pt; background-color: rgb(248,248,240) }
+.infobox   { margin-left: 4mm; margin-right: 4mm; background-color: rgb(248,248,240); border: 1px solid rgb(128,128,128); padding: 3pt; overflow: auto }
+.block     { text-align: justify; margin-left: 4mm; margin-right: 4mm }
+.fancy     { font-weight: bold; font-style: italic; color: darkred }
+.warning   { color: darkred }
+.comment   { color: green }
+
+h2    { margin-top: 1cm;  }
+li    { margin-top: 3pt; margin-bottom: 3pt; }
+dt    { font-weight: bold; margin-top: 6pt }
+code  { color: darkgreen; font-weight: bold; }
+
+@media screen { .navi { } }
+@media print  { .navi { display: none; }  .index { display: none; } }
